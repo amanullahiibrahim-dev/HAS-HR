@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { policyForClient, resolvedEntitlements } from "./leave-policy";
+import type { LeaveType } from "./leave-policy";
 
 export type Staff = {
   id: string;
   name: string;
   dept: string;
   role: "Teacher" | "Admin Staff";
+  gender?: "Male" | "Female" | "";
   devicePin: string;
   annual: number;
   medical: number;
@@ -17,12 +20,14 @@ export type Leave = {
   id: string;
   employeeId: string;
   name: string;
-  type: "Annual" | "Medical" | "Casual";
+  type: LeaveType;
   start: string;
   end: string;
   days: number;
   usedDays?: number;
   reason: string;
+  clinic?: string;
+  mcNumber?: string;
   status: "Approved" | "Pending" | "Completed" | "Declined";
   returnedAt?: string;
 };
@@ -99,5 +104,11 @@ export function stateForClient(store = readStore()) {
   }).sort((a, b) => `${b.date} ${b.checkIn}`.localeCompare(`${a.date} ${a.checkIn}`));
   const lastSeen = store.device.lastSeen;
   const online = !!lastSeen && Date.now() - new Date(lastSeen).getTime() < 5 * 60 * 1000;
-  return { people: store.people, leaves: store.leaves, attendance, device: { ...store.device, online } };
+  return {
+    people: store.people.map((person) => ({ ...person, entitlements: resolvedEntitlements(person) })),
+    leaves: store.leaves,
+    attendance,
+    device: { ...store.device, online },
+    leavePolicy: policyForClient
+  };
 }

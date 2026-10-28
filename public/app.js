@@ -68,7 +68,6 @@ function toast(message) { const t=document.getElementById('toast'); t.textConten
 function setDate() {
   document.getElementById('today').textContent=today.toLocaleDateString('en',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
   document.getElementById('greet-date').textContent=today.toLocaleDateString('en',{weekday:'long',month:'long',day:'numeric'}).toUpperCase();
-  document.getElementById('attendance-date').value=iso(today);
 }
 const avatarColors=['#e9eee8|#52705b','#f4e9e1|#9b6b4e','#eee9f3|#76648f','#e7eef4|#54728b','#f3eddd|#947947'];
 function personCell(name) {
@@ -92,7 +91,7 @@ function leaveBalance(person,type) {
   return {entitlement,used,available:Math.max(0,entitlement-used)};
 }
 function render() {
-  const date=document.getElementById('attendance-date').value||iso(today);
+  const date=iso(today);
   const records=db.attendance.filter(a=>a.date===date);
   const leavesToday=db.leaves.filter(l=>l.status==='Approved'&&l.start<=date&&l.end>=date);
   const rows=[...records];
@@ -103,15 +102,7 @@ function render() {
   document.getElementById('stat-leave').textContent=onLeave;
   document.getElementById('stat-total').textContent=db.people.length;
   document.getElementById('stat-pending').textContent=db.leaves.filter(l=>l.status==='Pending').length;
-  document.getElementById('att-present').textContent=present;
-  document.getElementById('att-late').textContent=late;
-  document.getElementById('att-absent').textContent=Math.max(0,db.people.length-rows.length);
-  document.getElementById('att-leave').textContent=onLeave;
-  document.getElementById('attendance-day-label').textContent=`Attendance for ${date===iso(today)?'today':nice(date)}`;
   document.getElementById('attendance-preview').innerHTML=rows.length?rows.slice(0,5).map(a=>`<tr><td>${personCell(a.name)}</td><td>${esc(a.checkIn)}</td><td>${esc(a.checkOut)}</td><td>${hours(a)}</td><td>${statusTag(a.status)}</td></tr>`).join(''):`<tr><td colspan="5" class="empty">No punches received for this date.</td></tr>`;
-  const statusFilter=document.getElementById('attendance-filter').value;
-  const filtered=rows.filter(a=>statusFilter==='all'||a.status===statusFilter);
-  document.getElementById('attendance-table').innerHTML=filtered.length?filtered.map(a=>`<tr><td>${personCell(a.name)}</td><td>${nice(a.date)}</td><td>${esc(a.checkIn)}</td><td>${esc(a.checkOut)}</td><td>${hours(a)}</td><td>${esc(a.source||'iClock990')}</td><td>${statusTag(a.status)}</td></tr>`).join(''):`<tr><td colspan="7" class="empty">No matching records.</td></tr>`;
   const arrivals=records.slice().sort((a,b)=>a.checkIn.localeCompare(b.checkIn)).slice(0,4);
   document.getElementById('activity').innerHTML=arrivals.length?arrivals.map(a=>`<div class="event"><div class="event-time">${esc(a.checkIn)}</div><div class="event-track"><i class="event-dot ${a.status==='Late'?'amber':''}"></i></div><div class="event-content"><b>${esc(a.name)}</b><p>${a.status==='Late'?'Late check-in':'Check-in'} · ${esc(a.source||'iClock990')}</p></div></div>`).join(''):`<div class="empty">Waiting for staff punches.</div>`;
   const types=['Annual','Medical','Casual'];
@@ -123,9 +114,126 @@ function render() {
   document.getElementById('leave-approved').textContent=db.leaves.filter(l=>l.status==='Approved').length;
   document.getElementById('leave-used').innerHTML=usedDaysForType('Annual')+` <span style="font-size:12px;color:#88928a;font-weight:500">days</span>`;
   document.getElementById('balance-table').innerHTML=db.people.length?db.people.map(p=>`<tr><td>${personCell(p.name)}</td>${types.map(type=>{const b=leaveBalance(p,type);return `<td><span class="balance-num">${b.available}</span> / ${b.entitlement} days</td>`;}).join('')}<td><button class="text-btn" onclick="editBalance('${p.id}')">Edit</button></td></tr>`).join(''):`<tr><td colspan="5" class="empty">Add staff to begin tracking balances.</td></tr>`;
-  renderPeople(); renderDevice(); refreshLeaveStaff();
+  renderAttendance(); renderPeople(); renderDevice(); refreshLeaveStaff();
 }
 function usedDaysForType(type){return db.people.reduce((sum,p)=>sum+usedDays(p.id,type),0);}
+
+/* ---------- Attendance page ---------- */
+const attState={preset:'month',from:'',to:'',staff:'all',search:'',sort:'date-desc',status:'all'};
+let attRows=null;
+const isoAdd=(dateStr,days)=>{const d=new Date(`${dateStr}T12:00:00`);d.setDate(d.getDate()+days);return iso(d);};
+const weekdayShort=(date)=>new Date(`${date}T12:00:00`).toLocaleDateString('en',{weekday:'short'});
+const minutesBetween=(from,to)=>{const m=s=>{const[h,mi]=s.split(':').map(Number);return h*60+mi;};return m(to)-m(from);};
+const fmtMins=(mins)=>`${Math.floor(mins/60)}h ${String(mins%60).padStart(2,'0')}m`;
+function attPresetRange(preset){
+  const todayIso=iso(today);
+  if(preset==='today')return[todayIso,todayIso];
+  if(preset==='yesterday'){const y=isoAdd(todayIso,-1);return[y,y];}
+  if(preset==='7')return[isoAdd(todayIso,-6),todayIso];
+  if(preset==='30')return[isoAdd(todayIso,-29),todayIso];
+  if(preset==='last-month')return[iso(new Date(today.getFullYear(),today.getMonth()-1,1)),iso(new Date(today.getFullYear(),today.getMonth(),0))];
+  return[iso(new Date(today.getFullYear(),today.getMonth(),1)),todayIso];
+}
+function eachDate(from,to){const out=[];for(let d=new Date(`${from}T12:00:00`);iso(d)<=to&&out.length<93;d.setDate(d.getDate()+1))out.push(iso(d));return out;}
+function fillAttStaff(){
+  const select=document.getElementById('att-staff'),current=select.value||attState.staff;
+  select.innerHTML=`<option value="all">All staff</option>`+db.people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  select.value=current==='all'||db.people.some(p=>p.id===current)?current:'all';
+  attState.staff=select.value;
+}
+function buildAttendanceRows(){
+  const people=attState.staff==='all'?db.people:db.people.filter(p=>p.id===attState.staff);
+  const dates=eachDate(attState.from,attState.to);
+  const todayIso=iso(today);
+  const recordMap=new Map(db.attendance.map(a=>[`${a.name}|${a.date}`,a]));
+  const rows=[];
+  for(const person of people){
+    for(const date of dates){
+      const record=recordMap.get(`${person.name}|${date}`);
+      if(!record&&date>todayIso)continue;
+      const leave=db.leaves.find(l=>l.employeeId===person.id&&l.status==='Approved'&&l.start<=date&&l.end>=date);
+      const weekday=new Date(`${date}T12:00:00`).getDay();
+      const weekend=weekday===5||weekday===6;
+      const row={employeeId:person.id,name:person.name,dept:person.dept||'',date,weekend,checkIn:'—',checkOut:'—',workedMins:0,lateMins:0,source:'',leave:leave?leave.type:''};
+      if(record){
+        row.checkIn=record.checkIn||'—';row.checkOut=record.checkOut||'—';row.source=record.source||'iClock990';
+        if(row.checkIn!=='—'&&row.checkOut!=='—'&&row.checkOut>row.checkIn)row.workedMins=minutesBetween(row.checkIn,row.checkOut);
+        const start=person.workStart||'09:00';
+        if(row.checkIn!=='—'&&row.checkIn>start)row.lateMins=minutesBetween(start,row.checkIn);
+        row.status=row.lateMins>0?'Late':'Present';
+      }else if(leave)row.status='On leave';
+      else if(weekend)row.status='Weekend';
+      else row.status='Absent';
+      rows.push(row);
+    }
+  }
+  return rows;
+}
+function attStatusTag(row){
+  if(row.status==='On leave')return `<span class="status leave">On leave${row.leave?' · '+esc(row.leave):''}</span>`;
+  if(row.status==='Weekend')return `<span class="status off">Off day</span>`;
+  if(row.status==='Absent')return `<span class="status absent">Absent</span>`;
+  if(row.status==='Late')return `<span class="status late">Late</span>`;
+  return `<span class="status present">Present${row.weekend?' · off day':''}</span>`;
+}
+function renderAttChart(all){
+  const dates=[...new Set(all.map(r=>r.date))].sort();
+  const worked=dates.map(d=>all.filter(r=>r.date===d).reduce((sum,r)=>sum+r.workedMins,0));
+  const late=dates.map(d=>all.filter(r=>r.date===d).reduce((sum,r)=>sum+r.lateMins,0));
+  const max=Math.max(1,...worked,...late),W=360,H=84,pad=6;
+  const x=i=>dates.length<2?W/2:pad+i*(W-2*pad)/(dates.length-1);
+  const y=v=>H-pad-(v/max)*(H-2*pad);
+  const points=vals=>vals.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  document.getElementById('att-chart').innerHTML=`<polyline points="0,${H-pad} ${W},${H-pad}" fill="none" stroke="#e9ece8" stroke-width="1"/><polyline points="${points(late)}" fill="none" stroke="#d87565" stroke-width="2" stroke-linejoin="round"/><polyline points="${points(worked)}" fill="none" stroke="#57a577" stroke-width="2" stroke-linejoin="round"/>`;
+  const labels=[...new Set([dates[0],dates[Math.floor((dates.length-1)/2)],dates[dates.length-1]].filter(Boolean))];
+  document.getElementById('att-chart-dates').innerHTML=labels.map(d=>`<span>${new Date(`${d}T12:00:00`).toLocaleDateString('en',{day:'2-digit',month:'short'})}</span>`).join('');
+}
+function renderAttendance(){
+  if(!attState.from||!attState.to){const[f,t]=attPresetRange(attState.preset);attState.from=f;attState.to=t;}
+  fillAttStaff();
+  const fromEl=document.getElementById('att-from'),toEl=document.getElementById('att-to');
+  fromEl.value=attState.from;toEl.value=attState.to;fromEl.max=iso(today);toEl.max=iso(today);
+  document.getElementById('att-period').value=attState.preset;
+  document.getElementById('att-custom').classList.toggle('open',attState.preset==='custom');
+  const all=buildAttendanceRows();
+  const present=all.filter(r=>r.status==='Present'||r.status==='Late').length;
+  const leaveDays=all.filter(r=>r.status==='On leave').length;
+  const absent=all.filter(r=>r.status==='Absent').length;
+  const lateMins=all.reduce((sum,r)=>sum+r.lateMins,0);
+  const lateDays=all.filter(r=>r.lateMins>0).length;
+  document.getElementById('att-present').textContent=present;
+  document.getElementById('att-leave').textContent=leaveDays;
+  document.getElementById('att-absent').textContent=absent;
+  document.getElementById('att-late-mins').textContent=lateMins;
+  document.getElementById('att-late-days').textContent=lateDays;
+  const score=Math.round((present/Math.max(1,present+absent))*100);
+  document.getElementById('att-score').textContent=`${score}%`;
+  document.getElementById('att-score-ring').style.background=`conic-gradient(var(--green) ${score*3.6}deg,#e7eee8 0deg)`;
+  renderAttChart(all);
+  const staffLabel=attState.staff==='all'?'All staff':(db.people.find(p=>p.id===attState.staff)?.name||'Staff');
+  document.getElementById('att-range-label').textContent=`${nice(attState.from)} – ${nice(attState.to)} · ${staffLabel}`;
+  let rows=[...all];
+  if(attState.status!=='all')rows=rows.filter(r=>r.status===attState.status);
+  const query=attState.search.trim().toLowerCase();
+  if(query)rows=rows.filter(r=>`${r.name} ${r.employeeId} ${r.dept} ${r.status} ${r.leave}`.toLowerCase().includes(query));
+  if(attState.sort==='date-asc')rows.sort((a,b)=>a.date.localeCompare(b.date)||a.name.localeCompare(b.name));
+  else if(attState.sort==='late')rows.sort((a,b)=>b.lateMins-a.lateMins||b.date.localeCompare(a.date));
+  else if(attState.sort==='hours')rows.sort((a,b)=>b.workedMins-a.workedMins||b.date.localeCompare(a.date));
+  else rows.sort((a,b)=>b.date.localeCompare(a.date)||a.name.localeCompare(b.name));
+  attRows=rows;
+  document.getElementById('att-count').textContent=`${rows.length} record${rows.length===1?'':'s'}`;
+  document.getElementById('attendance-table').innerHTML=rows.length?rows.slice(0,400).map(r=>`<tr><td>${personCell(r.name)}</td><td><b>${esc(weekdayShort(r.date))}</b><br><small class="staff-role">${nice(r.date)}</small></td><td>${esc(r.checkIn)}</td><td>${esc(r.checkOut)}</td><td>${r.workedMins?fmtMins(r.workedMins):'—'}</td><td>${r.lateMins?`<span class="att-late">${r.lateMins} min</span>`:'—'}</td><td>${attStatusTag(r)}</td><td><button class="text-btn" onclick="viewAttendance('${esc(r.employeeId)}','${r.date}')">View</button></td></tr>`).join(''):`<tr><td colspan="8" class="empty">No attendance rows for this period.</td></tr>`;
+}
+function viewAttendance(employeeId,date){
+  const person=db.people.find(p=>p.id===employeeId);
+  const row=(attRows||[]).find(r=>r.employeeId===employeeId&&r.date===date);
+  if(!person||!row)return;
+  document.getElementById('modal-title').textContent=`${person.name} · ${nice(date)}`;
+  document.getElementById('modal-body').innerHTML=`<dl class="att-detail"><div><dt>Status</dt><dd>${attStatusTag(row)}</dd></div><div><dt>Check in</dt><dd>${esc(row.checkIn)}</dd></div><div><dt>Check out</dt><dd>${esc(row.checkOut)}</dd></div><div><dt>Worked</dt><dd>${row.workedMins?fmtMins(row.workedMins):'—'}</dd></div><div><dt>Late</dt><dd>${row.lateMins?`${row.lateMins} mins`:'—'}</dd></div><div><dt>Expected start</dt><dd>${esc(person.workStart||'09:00')}</dd></div><div><dt>Source</dt><dd>${esc(row.source||row.leave||'—')}</dd></div><div><dt>Department</dt><dd>${esc(person.dept||'—')}</dd></div></dl>`;
+  const save=document.getElementById('modal-save');
+  if(save){save.style.display='none';save.onclick=null;}
+  document.getElementById('modal-back').classList.add('open');
+}
 function renderPeople() {
   const query=document.getElementById('people-search').value.toLowerCase();
   const people=db.people.filter(p=>(p.name+p.dept+p.id+p.devicePin+p.role).toLowerCase().includes(query));
@@ -139,10 +247,16 @@ function renderDevice() {
   if(state)state.textContent=online?'Connected to office server':'Waiting for iClock990';
   if(last)last.textContent=db.device.lastSeen?`${online?'Last device signal':'Last seen'} ${new Date(db.device.lastSeen).toLocaleString()} · ${db.device.count} punches received`:'Waiting for the first device check-in';
 }
-function go(page) { document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id==='page-'+page));document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===page));document.getElementById('crumb').textContent=page==='people'?'Employees':page[0].toUpperCase()+page.slice(1);window.scrollTo(0,0); }
+function go(page) { document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id==='page-'+page));document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('active',x.dataset.page===page));document.getElementById('crumb').textContent=page==='people'?'Employees':page==='leaves'?'Staff Leave':page[0].toUpperCase()+page.slice(1);window.scrollTo(0,0); }
 window.addEventListener('click',e=>{const b=e.target.closest?.('#nav button[data-page]');if(b)go(b.dataset.page);},true);
-document.getElementById('attendance-date').addEventListener('change',render);
-document.getElementById('attendance-filter').addEventListener('change',render);
+document.getElementById('att-staff').addEventListener('change',e=>{attState.staff=e.target.value;renderAttendance();});
+document.getElementById('att-period').addEventListener('change',e=>{attState.preset=e.target.value;if(attState.preset!=='custom'){const[f,t]=attPresetRange(attState.preset);attState.from=f;attState.to=t;}renderAttendance();});
+document.getElementById('att-view').addEventListener('click',()=>{const from=document.getElementById('att-from').value,to=document.getElementById('att-to').value;if(!from||!to||from>to)return toast('Choose a valid attendance period.');attState.preset='custom';attState.from=from;attState.to=to;renderAttendance();});
+document.getElementById('att-search').addEventListener('input',e=>{attState.search=e.target.value;renderAttendance();});
+document.getElementById('att-sort').addEventListener('change',e=>{attState.sort=e.target.value;renderAttendance();});
+document.getElementById('att-chips').addEventListener('click',e=>{const chip=e.target.closest('button.chip');if(!chip)return;attState.status=chip.dataset.status;document.querySelectorAll('#att-chips .chip').forEach(c=>c.classList.toggle('active',c===chip));renderAttendance();});
+document.getElementById('att-print').addEventListener('click',()=>window.print());
+document.getElementById('att-export').addEventListener('click',()=>exportAttendance());
 document.getElementById('leave-filter').addEventListener('change',render);
 document.getElementById('people-search').addEventListener('input',renderPeople);
 document.querySelectorAll('input[name="leave-role"]').forEach(r=>r.addEventListener('change',()=>{document.getElementById('lp-employee').value='';refreshLeaveStaff();}));
@@ -196,10 +310,16 @@ function openModal(kind){let title,body,saveFn;
     body=`<div class="field"><label>Full name</label><input id="f-name" placeholder="Staff member name"></div><div class="form-row"><div class="field"><label>Staff type</label><select id="f-role"><option>Teacher</option><option>Admin Staff</option></select></div><div class="field"><label>Department</label><input id="f-dept" placeholder="Department"></div></div><div class="form-row"><div class="field"><label>Employee ID</label><input id="f-id" placeholder="e.g. EMP-009"></div><div class="field"><label>Machine PIN / user ID</label><input id="f-pin" placeholder="PIN shown on iClock990"></div></div>`;
     saveFn=async()=>{const employee={name:val('f-name').trim(),role:val('f-role'),dept:val('f-dept'),id:val('f-id').trim(),devicePin:val('f-pin').trim()};if(!employee.name||!employee.id||!employee.devicePin)return toast('Name, employee ID and machine PIN are required.');if(await saveAction('employee.create',{employee})){closeModal();toast('Staff member added.');}};
   }
-  document.getElementById('modal-title').textContent=title;document.getElementById('modal-body').innerHTML=body;document.getElementById('modal-save').onclick=saveFn;
+  document.getElementById('modal-title').textContent=title;document.getElementById('modal-body').innerHTML=body;
+  const saveButton=document.getElementById('modal-save');saveButton.style.display=saveFn?'':'none';saveButton.onclick=saveFn;
   document.getElementById('modal-back').classList.add('open');
 }
 async function decision(id,status){if(await saveAction('leave.decision',{id,status}))toast(`Leave ${status.toLowerCase()}.`);}
 async function editBalance(id){const p=db.people.find(person=>person.id===id);if(!p)return;const annual=prompt(`Annual leave entitlement for ${p.name}:`,p.annual);if(annual===null)return;const medical=prompt('Medical leave entitlement:',p.medical);if(medical===null)return;const casual=prompt('Casual leave entitlement:',p.casual);if(casual===null)return;if([annual,medical,casual].some(x=>x===''||!Number.isFinite(Number(x))||Number(x)<0))return toast('Enter valid non-negative balance numbers.');if(await saveAction('employee.balance',{employee:{id:p.id,annual:Number(annual),medical:Number(medical),casual:Number(casual)}}))toast('Leave entitlements updated.');}
 async function editLeaveDays(id){const leave=db.leaves.find(item=>item.id===id);if(!leave)return;const usedDays=prompt(`Actual ${leave.type.toLowerCase()} leave days used by ${leave.name} (maximum ${leave.days}):`,leave.usedDays??leave.days);if(usedDays===null)return;if(usedDays===''||!Number.isFinite(Number(usedDays))||Number(usedDays)<0||Number(usedDays)>leave.days)return toast('Enter a number between zero and the planned days.');if(await saveAction('leave.adjust',{id,usedDays:Number(usedDays)}))toast('Actual leave days updated.');}
-function exportAttendance(){const rows=[['Employee','Date','Check-in','Check-out','Status','Source'],...db.attendance.map(a=>[a.name,a.date,a.checkIn,a.checkOut,a.status,a.source])];const csv=rows.map(r=>r.map(x=>'"'+String(x??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));link.download='attendance.csv';link.click();URL.revokeObjectURL(link.href);}
+function exportAttendance(){
+  const source=attRows&&attRows.length?attRows:db.attendance.map(a=>({name:a.name,date:a.date,checkIn:a.checkIn,checkOut:a.checkOut,workedMins:0,lateMins:0,status:a.status,source:a.source,leave:''}));
+  const rows=[['Employee','Date','Check-in','Check-out','Worked','Late (mins)','Status','Source'],...source.map(r=>[r.name,r.date,r.checkIn,r.checkOut,r.workedMins?fmtMins(r.workedMins):'—',r.lateMins||0,r.status,r.source||r.leave||''])];
+  const csv=rows.map(r=>r.map(x=>'"'+String(x??'').replace(/"/g,'""')+'"').join(',')).join('\r\n');
+  const link=document.createElement('a');link.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));link.download='attendance.csv';link.click();URL.revokeObjectURL(link.href);
+}
