@@ -11,6 +11,40 @@ const initials = (n) => String(n||'?').split(' ').map(x=>x[0]).slice(0,2).join('
 const esc = (s) => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let db = {people:[],attendance:[],leaves:[],device:{online:false,lastSeen:null,serial:null,count:0}};
 let authenticated = false;
+let editingLeaveId = null;
+let leavePlanBusy = false;
+
+function refreshLeaveStaff() {
+  const role=document.querySelector('input[name="leave-role"]:checked')?.value;
+  const select=document.getElementById('lp-employee'), selected=select.value;
+  const people=db.people.filter(p=>p.role===role);
+  select.innerHTML=`<option value="">${!role?'Select Admin or Teacher first':people.length?'Select a staff member':'No staff in this group'}</option>`+people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  select.disabled=!people.length;
+  select.value=people.some(p=>p.id===selected)?selected:'';
+  renderLeavePlanSummary();
+}
+function renderLeavePlanSummary() {
+  const person=db.people.find(p=>p.id===val('lp-employee'));
+  const summary=document.getElementById('leave-staff-summary');
+  if(person){const balance=leaveBalance(person,val('lp-type'));
+    summary.innerHTML=`<div class="leave-staff-identity"><span class="mini-avatar">${esc(initials(person.name))}</span><dl><div><dt>Staff name</dt><dd>${esc(person.name)}</dd></div><div><dt>Role</dt><dd>${esc(person.role)}</dd></div><div><dt>Department</dt><dd>${esc(person.dept||'Not set')}</dd></div><div><dt>Employee ID</dt><dd>${esc(person.id)}</dd></div></dl></div><div class="leave-balance-strip"><strong>${esc(val('lp-type'))} leave</strong><dl><div><dt>Entitlement</dt><dd>${balance.entitlement} days</dd></div><div><dt>Used / reserved</dt><dd>${balance.used} days</dd></div><div><dt>Remaining</dt><dd>${balance.available} days</dd></div></dl></div>`;
+  }else summary.textContent='Select a staff type and staff member to view their details and leave balance.';
+  const active=!editingLeaveId||db.leaves.some(l=>l.id===editingLeaveId&&['Approved','Pending'].includes(l.status));
+  document.getElementById('lp-save').disabled=leavePlanBusy||!!editingLeaveId||!person;
+  document.getElementById('lp-update').disabled=leavePlanBusy||!editingLeaveId||!person||!active;
+  document.getElementById('leave-editor-mode').textContent=editingLeaveId?'Editing record':'New record';
+  document.getElementById('leave-plan-message').textContent=!active?'This record is no longer editable. Clear to start a new record.':editingLeaveId?'Update saves changes to the selected record.':person?'Ready to record leave.':'Choose staff to begin.';
+}
+function clearLeavePlan() {
+  editingLeaveId=null;
+  document.getElementById('leave-plan-form').reset();
+  document.querySelectorAll('input[name="leave-role"]').forEach(r=>r.checked=false);
+  document.getElementById('lp-employee').value='';
+  document.getElementById('lp-start').value=iso(new Date());
+  document.getElementById('lp-end').value=expectedReturnDate(val('lp-start'),1);
+  document.getElementById('lp-end').min=val('lp-start');
+  refreshLeaveStaff();
+}
 
 async function api(path, options={}) {
   const response = await fetch(path,{credentials:'same-origin',...options,headers:{'content-type':'application/json',...(options.headers||{})}});
@@ -84,12 +118,12 @@ function render() {
   document.getElementById('balance-preview').innerHTML=types.map(type=>{const total=db.people.reduce((sum,p)=>sum+Number(p[type.toLowerCase()]||0),0);const used=db.people.reduce((sum,p)=>sum+usedDays(p.id,type),0);const available=Math.max(0,total-used);return `<div class="leave-row"><div class="leave-label"><i class="leave-dot"></i>${type} leave</div><div style="text-align:right"><div class="leave-count"><b>${available}</b> available · ${used} used</div><div class="bars">${Array.from({length:8},(_,i)=>`<i class="${i<Math.round(available/Math.max(1,total)*8)?'on':''}"></i>`).join('')}</div></div></div>`;}).join('');
   const leaveFilter=document.getElementById('leave-filter').value;
   const leaves=db.leaves.filter(l=>leaveFilter==='all'||l.status===leaveFilter);
-  document.getElementById('leave-table').innerHTML=leaves.length?leaves.map(l=>`<tr><td>${personCell(l.name)}</td><td>${esc(l.type)}</td><td>${nice(l.start)}${l.end!==l.start?' – '+nice(l.end):''}${l.returnedAt?`<small class="staff-role"><br>Returned ${nice(l.returnedAt.slice(0,10))}</small>`:''}</td><td>${l.status==='Completed'?`${esc(l.usedDays??l.days)} / ${esc(l.days)}`:esc(l.days)}</td><td>${esc(l.reason||'—')}</td><td>${statusTag(l.status)}</td><td>${l.status==='Pending'?`<button class="text-btn" onclick="decision('${l.id}','Approved')">Approve</button><button class="text-btn" style="color:#b9665a" onclick="decision('${l.id}','Declined')">Decline</button>`:l.status==='Completed'?`<button class="text-btn" onclick="editLeaveDays('${l.id}')">Adjust days</button>`:'—'}</td></tr>`).join(''):`<tr><td colspan="7" class="empty">No leave records yet.</td></tr>`;
+  document.getElementById('leave-table').innerHTML=leaves.length?leaves.map(l=>`<tr><td>${personCell(l.name)}</td><td>${esc(l.type)}</td><td>${nice(l.start)}${l.end!==l.start?' – '+nice(l.end):''}${l.returnedAt?`<small class="staff-role"><br>Returned ${nice(l.returnedAt.slice(0,10))}</small>`:''}</td><td>${l.status==='Completed'?`${esc(l.usedDays??l.days)} / ${esc(l.days)}`:esc(l.days)}</td><td>${esc(l.reason||'—')}</td><td>${statusTag(l.status)}</td><td>${['Approved','Pending'].includes(l.status)?`<button class="text-btn" onclick="editLeaveRecord('${l.id}')">Edit</button>`:''}${l.status==='Pending'?`<button class="text-btn" onclick="decision('${l.id}','Approved')">Approve</button><button class="text-btn" style="color:#b9665a" onclick="decision('${l.id}','Declined')">Decline</button>`:l.status==='Completed'?`<button class="text-btn" onclick="editLeaveDays('${l.id}')">Adjust days</button>`:'—'}</td></tr>`).join(''):`<tr><td colspan="7" class="empty">No leave records yet.</td></tr>`;
   document.getElementById('leave-pending').textContent=db.leaves.filter(l=>l.status==='Pending').length;
   document.getElementById('leave-approved').textContent=db.leaves.filter(l=>l.status==='Approved').length;
   document.getElementById('leave-used').innerHTML=usedDaysForType('Annual')+` <span style="font-size:12px;color:#88928a;font-weight:500">days</span>`;
   document.getElementById('balance-table').innerHTML=db.people.length?db.people.map(p=>`<tr><td>${personCell(p.name)}</td>${types.map(type=>{const b=leaveBalance(p,type);return `<td><span class="balance-num">${b.available}</span> / ${b.entitlement} days</td>`;}).join('')}<td><button class="text-btn" onclick="editBalance('${p.id}')">Edit</button></td></tr>`).join(''):`<tr><td colspan="5" class="empty">Add staff to begin tracking balances.</td></tr>`;
-  renderPeople(); renderDevice();
+  renderPeople(); renderDevice(); refreshLeaveStaff();
 }
 function usedDaysForType(type){return db.people.reduce((sum,p)=>sum+usedDays(p.id,type),0);}
 function renderPeople() {
@@ -111,6 +145,16 @@ document.getElementById('attendance-date').addEventListener('change',render);
 document.getElementById('attendance-filter').addEventListener('change',render);
 document.getElementById('leave-filter').addEventListener('change',render);
 document.getElementById('people-search').addEventListener('input',renderPeople);
+document.querySelectorAll('input[name="leave-role"]').forEach(r=>r.addEventListener('change',()=>{document.getElementById('lp-employee').value='';refreshLeaveStaff();}));
+document.getElementById('lp-employee').addEventListener('change',renderLeavePlanSummary);
+document.getElementById('lp-type').addEventListener('change',renderLeavePlanSummary);
+const updatePlanReturn=()=>{document.getElementById('lp-end').value=expectedReturnDate(val('lp-start'),val('lp-days'));document.getElementById('lp-end').min=val('lp-start');};
+document.getElementById('lp-start').addEventListener('change',updatePlanReturn);
+document.getElementById('lp-days').addEventListener('input',updatePlanReturn);
+document.getElementById('lp-clear').addEventListener('click',clearLeavePlan);
+document.getElementById('leave-plan-form').addEventListener('submit',e=>{e.preventDefault();if(!editingLeaveId)saveLeavePlan(false);});
+document.getElementById('lp-update').addEventListener('click',()=>saveLeavePlan(true));
+clearLeavePlan();
 document.getElementById('login-form').addEventListener('submit',async e=>{e.preventDefault();showLoginError('');const button=e.currentTarget.querySelector('button');button.disabled=true;try{await api('/api/auth/login',{method:'POST',body:JSON.stringify({password:document.getElementById('login-password').value})});document.getElementById('login-password').value='';await refreshState();}catch(error){showLoginError(error.message);}finally{button.disabled=false;}});
 document.getElementById('logout').addEventListener('click',async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});setAuthenticated(false);});
 setDate();
@@ -120,12 +164,30 @@ setInterval(()=>{if(authenticated)refreshState().catch(error=>{if(error.message.
 async function saveAction(action,payload) { try { db=await api('/api/state',{method:'POST',body:JSON.stringify({action,...payload})});render();return true; } catch(error) { toast(error.message);return false; } }
 function closeModal(){document.getElementById('modal-back').classList.remove('open');}
 function val(id){return document.getElementById(id)?.value||'';}
+async function saveLeavePlan(update) {
+  if(leavePlanBusy||update!==!!editingLeaveId)return;
+  const form=document.getElementById('leave-plan-form');
+  if(!form.reportValidity())return;
+  const leave={employeeId:val('lp-employee'),type:val('lp-type'),days:Number(val('lp-days')),start:val('lp-start'),end:val('lp-end'),reason:val('lp-reason'),status:val('lp-status')};
+  if(!leave.employeeId||!Number.isFinite(leave.days)||leave.days<=0||leave.end<leave.start)return toast('Check the staff member, dates and leave days.');
+  leavePlanBusy=true;renderLeavePlanSummary();
+  try{if(await saveAction(update?'leave.update':'leave.create',{id:editingLeaveId,leave})){clearLeavePlan();toast(update?'Leave record updated.':'Leave record saved.');}}
+  finally{leavePlanBusy=false;renderLeavePlanSummary();}
+}
+function editLeaveRecord(id) {
+  if(leavePlanBusy)return;
+  const leave=db.leaves.find(l=>l.id===id), person=db.people.find(p=>p.id===leave?.employeeId);
+  if(!leave||!person||!['Approved','Pending'].includes(leave.status))return toast('Only approved or pending records can be edited.');
+  editingLeaveId=id;
+  document.querySelectorAll('input[name="leave-role"]').forEach(r=>r.checked=r.value===person.role);
+  refreshLeaveStaff();document.getElementById('lp-employee').value=person.id;
+  for(const [field,value] of Object.entries({type:leave.type,days:leave.days,start:leave.start,end:leave.end,reason:leave.reason,status:leave.status}))document.getElementById('lp-'+field).value=value;
+  document.getElementById('lp-end').min=leave.start;
+  renderLeavePlanSummary();go('leaves');document.getElementById('leave-workspace').scrollIntoView({block:'start'});
+}
 function openModal(kind){let title,body,saveFn;
-  if(kind==='leave'){
-    title='Record staff leave';
-    body=`<div class="field"><label>Staff member</label><select id="f-employee">${db.people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.role)}</option>`).join('')}</select></div><div class="form-row"><div class="field"><label>Leave type</label><select id="f-type"><option>Annual</option><option>Medical</option><option>Casual</option></select></div><div class="field"><label>Days</label><input id="f-days" type="number" min="0.5" step="0.5" value="1"></div></div><div class="form-row"><div class="field"><label>Leave starts</label><input id="f-start" type="date" value="${iso(today)}"></div><div class="field"><label>Expected return</label><input id="f-end" type="date" value="${expectedReturnDate(iso(today),1)}"></div></div><div class="field"><label>Reason / note</label><input id="f-reason" placeholder="Optional"></div><div class="field"><label>Record status</label><select id="f-status"><option value="Approved">Approved / on leave now</option><option value="Pending">Pending approval</option></select></div><p class="helper">An approved leave is marked completed when this staff member’s machine PIN records a check-in during the leave dates.</p>`;
-    saveFn=async()=>{const leave={employeeId:val('f-employee'),type:val('f-type'),days:Number(val('f-days')),start:val('f-start'),end:val('f-end'),reason:val('f-reason'),status:val('f-status')};if(!leave.employeeId||!leave.start||!leave.end||leave.end<leave.start||leave.days<=0)return toast('Check the staff member, dates and leave days.');if(await saveAction('leave.create',{leave})){closeModal();toast('Leave record saved.');}};
-  } else if(kind==='manual'){
+  if(kind==='leave'){if(leavePlanBusy)return;clearLeavePlan();go('leaves');document.getElementById('leave-workspace').scrollIntoView({block:'start'});return;}
+  if(kind==='manual'){
     title='Correct attendance record';
     body=`<div class="field"><label>Staff member</label><select id="f-employee">${db.people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></div><div class="form-row"><div class="field"><label>Date</label><input id="f-date" type="date" value="${iso(today)}"></div><div class="field"><label>Check in</label><input id="f-in" type="time" value="09:00"></div></div><div class="field"><label>Check out (optional)</label><input id="f-out" type="time"></div>`;
     saveFn=async()=>{if(await saveAction('attendance.manual',{entry:{employeeId:val('f-employee'),date:val('f-date'),checkIn:val('f-in'),checkOut:val('f-out')}})){closeModal();toast('Attendance correction saved.');}};
@@ -135,11 +197,6 @@ function openModal(kind){let title,body,saveFn;
     saveFn=async()=>{const employee={name:val('f-name').trim(),role:val('f-role'),dept:val('f-dept'),id:val('f-id').trim(),devicePin:val('f-pin').trim()};if(!employee.name||!employee.id||!employee.devicePin)return toast('Name, employee ID and machine PIN are required.');if(await saveAction('employee.create',{employee})){closeModal();toast('Staff member added.');}};
   }
   document.getElementById('modal-title').textContent=title;document.getElementById('modal-body').innerHTML=body;document.getElementById('modal-save').onclick=saveFn;
-  if(kind==='leave'){
-    const updateExpectedReturn=()=>{document.getElementById('f-end').value=expectedReturnDate(val('f-start'),val('f-days'));};
-    document.getElementById('f-start').addEventListener('change',updateExpectedReturn);
-    document.getElementById('f-days').addEventListener('input',updateExpectedReturn);
-  }
   document.getElementById('modal-back').classList.add('open');
 }
 async function decision(id,status){if(await saveAction('leave.decision',{id,status}))toast(`Leave ${status.toLowerCase()}.`);}

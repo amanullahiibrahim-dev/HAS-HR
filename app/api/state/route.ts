@@ -31,15 +31,23 @@ export async function POST(request: Request) {
       if (!Number.isFinite(value) || value < 0) return NextResponse.json({ error: "Leave balances must be non-negative numbers." }, { status: 400 });
       person[key] = value;
     }
-  } else if (payload.action === "leave.create") {
+  } else if (payload.action === "leave.create" || payload.action === "leave.update") {
     const input = payload.leave as Partial<Leave> | undefined;
+    const existing = payload.action === "leave.update" ? store.leaves.find((item) => item.id === payload.id) : undefined;
+    if (payload.action === "leave.update" && !existing) return NextResponse.json({ error: "Leave record not found." }, { status: 404 });
+    if (existing && !["Approved", "Pending"].includes(existing.status)) return NextResponse.json({ error: "Only approved or pending leave can be edited." }, { status: 409 });
     const person = store.people.find((p) => p.id === input?.employeeId);
     if (!person || !input?.start || !input.end || input.end < input.start || !Number.isFinite(Number(input.days)) || Number(input.days) <= 0) return NextResponse.json({ error: "Choose an employee and valid leave dates and days." }, { status: 400 });
     if (!input.type || !["Annual", "Medical", "Casual"].some((type) => type === input.type)) return NextResponse.json({ error: "Choose a valid leave type." }, { status: 400 });
-    store.leaves.unshift({ id: makeId(), employeeId: person.id, name: person.name, type: input.type as Leave["type"], start: input.start, end: input.end, days: Number(input.days), reason: input.reason?.trim() || "", status: input.status === "Pending" ? "Pending" : "Approved" });
+    const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+    if (!validDate(input.start) || !validDate(input.end) || !["Approved", "Pending"].includes(String(input.status))) return NextResponse.json({ error: "Choose valid dates and an Approved or Pending status." }, { status: 400 });
+    const record = { employeeId: person.id, name: person.name, type: input.type as Leave["type"], start: input.start, end: input.end, days: Number(input.days), reason: typeof input.reason === "string" ? input.reason.trim() : "", status: input.status as Leave["status"] };
+    if (existing) Object.assign(existing, record);
+    else store.leaves.unshift({ id: makeId(), ...record });
   } else if (payload.action === "leave.decision") {
     const leave = store.leaves.find((item) => item.id === payload.id);
     if (!leave || !["Approved", "Declined"].includes(String(payload.status))) return NextResponse.json({ error: "Leave request not found." }, { status: 404 });
+    if (leave.status !== "Pending") return NextResponse.json({ error: "Only pending requests can be reviewed." }, { status: 409 });
     leave.status = payload.status as Leave["status"];
   } else if (payload.action === "leave.adjust") {
     const leave = store.leaves.find((item) => item.id === payload.id);
