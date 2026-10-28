@@ -1,8 +1,9 @@
 import { createServer } from "node:http";
 import { isIP } from "node:net";
 import next from "next";
-import { loadEnvConfig } from "@next/env";
+import nextEnv from "@next/env";
 
+const { loadEnvConfig } = nextEnv;
 loadEnvConfig(process.cwd());
 const hostname = process.env.HAAZIR_BIND_HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3000);
