@@ -1,4 +1,4 @@
-# Huma — Attendance & Leave
+# Haazir App — Attendance & Leave
 
 A Next.js app for recording attendance, importing biometric machine CSV exports, managing leave requests, and tracking employee leave balances.
 
@@ -9,3 +9,4 @@ A Next.js app for recording attendance, importing biometric machine CSV exports,
 3. Run `npm run dev` and open http://localhost:3000.
 
 Attendance and leave data are currently stored in the browser using localStorage. Machine integration is through CSV export/import; a direct connection requires the device model and its API or network protocol.
+
