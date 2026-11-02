@@ -46,5 +46,5 @@ createServer((request, response) => {
   }
   void handle(request, response);
 }).listen(port, hostname, () => {
-  console.log(`Haazir App listening on http://${hostname}:${port}`);
+  console.log(`Haaziry listening on http://${hostname}:${port}`);
 });

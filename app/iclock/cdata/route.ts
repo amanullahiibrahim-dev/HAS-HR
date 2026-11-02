@@ -1,4 +1,5 @@
-import { readStore, weekdaysBeforeReturn, writeStore } from "@/lib/store";
+import { readStore, writeStore } from "@/lib/store";
+import { ingestPunches, normalizePunch } from "@/lib/punches";
 import type { Punch } from "@/lib/store";
 
 export const runtime = "nodejs";
@@ -60,6 +61,7 @@ export async function POST(request: Request) {
     return plain("OK");
   }
 
+  const punches: Punch[] = [];
   for (const line of body.split(/\r?\n/).filter(Boolean)) {
     const fields = line.split("\t");
     if (fields.length < 2) continue;
@@ -67,24 +69,10 @@ export async function POST(request: Request) {
     const timestamp = parseDeviceTime(fields[1]);
     if (!pin || !timestamp) continue;
     const state = Number.parseInt(fields[2] || "0", 10);
-    const punch: Punch = { id: `${device.serial}:${pin}:${timestamp}:${Number.isFinite(state) ? state : 0}`, serial: device.serial, pin, timestamp, state: Number.isFinite(state) ? state : 0, verify: fields[3]?.trim() || "", workCode: fields[4]?.trim() || "" };
-    if (store.punches.some((item) => item.id === punch.id)) continue;
-    store.punches.push(punch);
-    store.device.count += 1;
-
-    // Status 0 is the terminal's normal check-in event. On that return punch,
-    // close an approved leave covering that day (including an early return).
-    if (punch.state === 0) {
-      const employee = store.people.find((person) => person.devicePin === pin || person.id === pin);
-      if (employee) for (const leave of store.leaves) {
-        if (leave.employeeId === employee.id && leave.status === "Approved" && timestamp.slice(0, 10) >= leave.start) {
-          leave.status = "Completed";
-          leave.returnedAt = timestamp;
-          leave.usedDays = Math.min(leave.days, weekdaysBeforeReturn(leave.start, timestamp.slice(0, 10)));
-        }
-      }
-    }
+    try { punches.push({...normalizePunch({serial:device.serial,pin,timestamp,state}),verify:fields[3]?.trim()||"",workCode:fields[4]?.trim()||""}); }
+    catch { /* Ignore invalid terminal rows without rejecting the rest of its batch. */ }
   }
+  store.device.count += ingestPunches(store,punches).inserted;
   writeStore(store);
   return plain("OK");
 }

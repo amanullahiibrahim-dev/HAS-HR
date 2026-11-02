@@ -1,10 +1,10 @@
-# Haazir App — Attendance & Leave
+# Haaziry — Attendance & Leave
 
-Haazir is a Next.js attendance and leave app intended to run as one always-on service on the office server. Developers can edit code on a separate PC and deploy it to that server. Staff, attendance, punch logs and leave records are stored on the server rather than in individual browsers.
+Haaziry is a Next.js attendance and leave app intended to run as one always-on service on the office server. Developers can edit code on a separate PC and deploy it to that server. Staff, attendance, punch logs and leave records are stored on the server rather than in individual browsers.
 
 ## Features
 
-- Receive attendance logs from ZKTeco iClock/ADMS at `/iclock/cdata`.
+- Pull attendance directly from the iClock990 over the LAN with `npm run device:sync` or `npm run device:watch`; see [direct connection setup](docs/attendance-sync.md). ADMS reception at `/iclock/cdata` is also available.
 - Match terminal user PINs to teacher and admin-staff records.
 - Group punches by person and date, show first check-in and last punch, and flag lateness against each person's expected start time.
 - Record approved or pending leave, calculate balances per staff member, and mark an approved leave completed when a check-in from that staff PIN arrives during the leave period.
@@ -20,7 +20,11 @@ Haazir is a Next.js attendance and leave app intended to run as one always-on se
 
 The developer command `npm run dev` listens only on the developer PC's loopback address. Configure the terminal to send to the office server, not the developer PC, except during a planned network test.
 
-## Configure the iClock990
+## Direct local connection (recommended)
+
+Follow [the direct connector setup](docs/attendance-sync.md). Use `npm run device:check` first, then start the app and run `npm run device:sync` or `npm run device:watch`. This reads the terminal using its IP, communication port and existing COMM key; no ADMS reconfiguration is needed.
+
+## Optional ADMS push connection
 
 The iClock990 product sheet lists ADMS as an optional feature, so first confirm ADMS is available on this specific terminal/firmware. In the terminal's Communication / PC Connection / ADMS settings, enable it and enter the office server's fixed private IP (or internal DNS), app port, and `/iclock/cdata` path if the device asks for one. The terminal and server must be able to communicate over the office network. Give both devices fixed/reserved private IPs. The app server checks the source IP on every `/iclock/` request, and the terminal serial must match `ZKTECO_DEVICE_SN`; the serial check alone is not treated as network security.
 
@@ -42,3 +46,14 @@ References: [ZKTeco iClock990 product sheet](https://www.zkteco-ea.com/wp-conten
 1. Run `npm install` on the developer PC.
 2. Create a local `.env.local` from `.env.example` with development-only credentials and a test serial.
 3. Run `npm run dev`, then open http://localhost:3000. This local dev server does not receive device traffic from the office server.
+
+## MC file backups
+
+MC attachments are private files in `data/mc-documents` by default, or beside `HAAZIR_DB_PATH` when the data store is relocated. Back up both the JSON store and the MC directory. Set `HAAZIR_MC_DIRECTORY` only if a separate private persistent directory is needed. See [MC uploads](docs/mc-uploads.md).
+
+Administrator sessions resume on a normal reload of the same tab while activity is less than 30 minutes old. Fresh openings require sign-in. The tab stores only an activity timestamp in sessionStorage, never the password. The HttpOnly cookie is a browser-session cookie with a signed 30-minute expiry; user activity renews it, while background polling does not. Inactivity locks the visible app and checks again on focus, visibility changes and API use, including after a suspended phone resumes. Browser or OS force-close detection is not guaranteed by web browsers; fresh navigation requires sign-in even if a browser restores session storage.
+
+
+## Importing staff profiles
+
+Copy `seed/staff.example.json` to `seed/staff.json`, fill in the office's staff records privately, then run `npm run seed:staff`. The real staff import file is excluded from Git because it can contain personnel and identity-card data. Existing profiles are preserved by the seed command.

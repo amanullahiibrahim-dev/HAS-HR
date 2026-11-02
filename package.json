@@ -6,16 +6,24 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "node server.mjs",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "device:check": "node scripts/zkteco-sync.mjs --check",
+    "device:sync": "node scripts/zkteco-sync.mjs",
+    "device:watch": "node scripts/zkteco-sync.mjs --watch",
+    "password:recovery": "node scripts/password-recovery.mjs",
+    "seed:staff": "node scripts/seed-staff.mjs"
   },
   "dependencies": {
+    "@graphland/zkteco": "0.1.0",
+    "@next/env": "^15.5.6",
     "next": "^15.5.6",
+    "nodemailer": "^10.3.1",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "@next/env": "^15.5.6"
+    "react-dom": "^19.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
     "eslint": "^9.38.0",

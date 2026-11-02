@@ -1,0 +1,7 @@
+# Permanent employee removal
+
+Employee Remove is permanent. The confirmation states that the profile, machine punch history for its PIN, leave, corrections, leave-change history and owned MC uploads are deleted. There is no removed-employee directory, restore action or archived-staff report option. Historical removedAt markers are recognized only for migrating older data and keeping it out of client views.
+
+Deletion saves removal of owned document metadata and a UUID-only cleanup queue before deleting the corresponding private files. Pending file cleanup is retried by authenticated state reads and subsequent updates. Invalid document IDs cannot identify a filesystem deletion target. Other employees' files and records are retained. If malformed legacy data shares one PIN between profiles, logs still needed by the remaining profile are retained.
+
+A private PIN import cutoff prevents old device downloads from importing deleted history again. It retains no employee name, ID, profile or restorable history. Logs from a retired, unassigned PIN are ignored. When the PIN is assigned to a new employee, its cutoff advances to that assignment, and the new profile's attendanceFrom prevents historical absent rows from being generated before it. The sync client acknowledges ignored logs without treating them as failed imports. This changes app storage and imports; no commands erase or modify the physical attendance terminal.

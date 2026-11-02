@@ -1,0 +1,11 @@
+[
+  {
+    "id": "EMP-001",
+    "name": "Example Staff",
+    "dept": "Teaching",
+    "role": "Teacher",
+    "gender": "",
+    "devicePin": "1001",
+    "idCardNumber": ""
+  }
+]

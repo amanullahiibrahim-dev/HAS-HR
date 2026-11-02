@@ -10,3 +10,7 @@ npm-debug.log*
 /data/
 next-dev.*.log
 *.zip
+
+# Private staff imports and generated TypeScript cache
+/seed/staff.json
+*.tsbuildinfo
