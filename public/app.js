@@ -932,7 +932,6 @@ function lockSession(message=''){
   setAuthenticated(false);clearClientSession();clearSessionTimers();closeModal();
   document.documentElement?.classList?.remove('theme-user');
   db={people:[],attendance:[],leaves:[],device:{online:false,lastSeen:null,serial:null,count:0}};
-  resetAttendanceReport();
   lastActivityAt=0;editingLeaveId=null;editingLeaveRevision=null;pendingMcUpload=null;
   showLoginError(message);
   // Finish pending renewal/logout before another password is accepted.
