@@ -1,3 +1,5 @@
+import { leavePeriod } from "./leave-periods";
+import { allocatedLeaveDays } from "./leave-period-allocation";
 import type { Leave, Store, Staff } from "./store";
 import { planDutyTravel, checkDutyOverlap } from "./duty-travel";
 import { countLeaveDays, excludeWeekends, planLeave, validLeaveDate, entitlementFor, sickUsage, usedDaysForType } from "./leave-policy";
@@ -8,15 +10,11 @@ export type MedicalDetails={reference:string;issuer:string;receivedOn:string;cov
 export const addDate=(value:string,days:number)=>{const d=new Date(`${value}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10);};
 export function resolveLeavePlan(store:Store,person:Staff,input:Partial<Leave>,excludeId?:string){
   const plan=resolveNewLeavePlan(store,person,input,excludeId);
-  const existing=excludeId?store.leaves.find(leave=>leave.id===excludeId):undefined;
-  const sameTrip=Object.keys({...existing?.trip,...plan.trip}).every(key=>existing?.trip?.[key as keyof PilgrimageDetails]===plan.trip?.[key as keyof PilgrimageDetails]);
-  if(existing?.deductibleDays!==undefined&&existing.type!=="Duty travel"&&existing.start===input.start&&existing.type===input.type&&existing.days===Number(input.days)&&sameTrip)
-    return {...plan,end:existing.end,days:existing.days,deductibleDays:existing.deductibleDays,preservedPeriod:true};
   return {...plan,deductibleDays:undefined,preservedPeriod:false};
 }
 function resolveNewLeavePlan(store:Store,person:Staff,input:Partial<Leave>,excludeId?:string){
   const type=input.type!,start=input.start!,days=Number(input.days),holidays=store.holidays||[];
-  if(type==="Duty travel")return planDutyTravel(start,input.duty);
+  if(type==="Duty travel")return planDutyTravel(start,input.duty,days);
   if(type==="No pay")return {...planLeave(type,start,days,[]),chargeType:"None",payBasis:"No pay",trip:undefined as PilgrimageDetails|undefined};
   if(type!=="Hajj"&&type!=="Umra")return {...planLeave(type,start,days,holidays),chargeType:type as string,payBasis:"Paid",trip:undefined as PilgrimageDetails|undefined};
   const trip=input.trip;
@@ -126,13 +124,29 @@ export function checkLeaveAllowance(store:Store,person:Staff,leave:Leave,exclude
   if(leave.type==="Hajj"||leave.type==="Umra"){
     if(leave.trip?.basis!=="Annual")return;
   }
-  if(leave.type.startsWith("Sick")){
-    const used=sickUsage(store.leaves,person.id,excludeId,year);
-    if(used.total+days>30)throw new Error("The combined sick-leave allowance is 30 days; check the remaining balance.");
-    if(leave.type==="Sick without MC"&&used.withoutMc+days>15)throw new Error("Sick leave without MC is limited to 15 days from the combined 30-day allowance.");
+  if(leave.type==="Paternity"||leave.type==="Maternity"){
+    const limit=entitlementFor(leave.type,person,leave.start);
+    const used=leave.eventReference?store.leaves.filter(l=>l.id!==excludeId&&l.employeeId===person.id&&l.type===leave.type&&l.eventReference===leave.eventReference&&["Pending","Approved","Completed"].includes(l.status)).reduce((sum,l)=>sum+(l.status==="Completed"?(l.usedDays??l.days):(l.deductibleDays??l.days)),0):0;
+    if(days+used>limit)throw new Error(`${leave.type} leave exceeds the allowance for this occasion.`);
     return;
   }
   const type=leave.chargeType==="Annual"?"Annual":leave.type;
-  const limit=entitlementFor(type,person,leave.start),used=usedDaysForType(store.leaves,person.id,type,excludeId,year);
-  if(days+used>limit)throw new Error(`${type} leave has ${Math.max(0,limit-used)} day(s) available.`);
+  const periods=new Map<string,ReturnType<typeof leavePeriod>>();
+  const end=leave.end&&leave.end>leave.start?leave.end:addDate(leave.start,1);
+  for(let day=leave.start,steps=0;day<end&&steps<2000;day=addDate(day,1),steps++){
+    const period=leavePeriod(person,type,day);
+    if(!period.start)throw new Error(period.label+". Set up the employee's leave periods in Manage Leave.");
+    periods.set(period.key,period);
+  }
+  for(const period of periods.values()){
+    const portion=allocatedLeaveDays(leave,period,store.holidays||[],excludeWeekends[type]);if(!portion)continue;
+    if(type.startsWith("Sick")){
+      const used=sickUsage(store.leaves,person.id,excludeId,period.start,person,store.holidays||[]);
+      if(used.total+portion>30)throw new Error(`The combined sick-leave allowance is 30 days for ${period.label}.`);
+      if(type==="Sick without MC"&&used.withoutMc+portion>15)throw new Error(`Sick leave without MC is limited to 15 days for ${period.label}.`);
+    }else{
+      const limit=entitlementFor(type,person,leave.start),used=usedDaysForType(store.leaves,person.id,type,excludeId,period.start,person,store.holidays||[]);
+      if(portion+used>limit)throw new Error(`${type} leave has ${Math.max(0,limit-used)} day(s) available for ${period.label}.`);
+    }
+  }
 }

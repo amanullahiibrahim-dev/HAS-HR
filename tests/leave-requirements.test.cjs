@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
 const cache={};function load(name){if(cache[name])return cache[name];const exports={};cache[name]=exports;vm.runInNewContext(ts.transpileModule(fs.readFileSync(`lib/${name}.ts`,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,{exports,require:n=>n.startsWith('./')?load(n.slice(2)):require(n),Date,Map,Set,process,Buffer});return exports;}
 const req=load('leave-requirements'),p=load('leave-policy');
-const person={id:'A',name:'Staff',role:'Teacher',devicePin:'01'};
+const person={joinedOn:'2010-01-01',id:'A',name:'Staff',role:'Teacher',devicePin:'01'};
 const fixture=()=>({people:[person],leaves:[],punches:[],holidays:[],device:{lastSeen:null,serial:null,count:0}});
 const trip=(changes={})=>({type:'Hajj',start:'2026-11-01',days:1,trip:{basis:'First paid Hajj',office:'Male',charter:false,firstHajjConfirmed:true,permissionReference:'HR/1',...changes}});
 const record=(plan,input)=>({id:'new',employeeId:'A',name:'Staff',reason:'',status:'Approved',...input,...plan});

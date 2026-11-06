@@ -4,6 +4,10 @@ Review date: 30 October 2026. Source: uploaded Maldives Civil Service Regulation
 
 This is a gap analysis, not a finding that Haaziry implements every current civil-service requirement. The uploaded English document is the original 2014 version, not a verified current consolidation. Article 2 requires compliance with later amendments. CSC publishes 2025 amendments and a September 2026 circular concerning Articles 181 and 184. Do not substitute old numerical limits for later applicable entitlements without the relevant circulars.
 
+## Period accounting follow-up implemented on 3 November 2026
+
+Annual, Family and Sick now support service-anniversary periods, joining/approved cycle dates, explicit calendar-policy settings, per-period opening usage, shared sick resets and cross-period day allocation. See leave-policy.md. Earlier calendar-only gaps below describe the original review state. No dates are inferred and no prior opening amounts are automatically remapped; eligibility, service-credit decisions, expiry/carryover and some per-occasion validation remain outside this update.
+
 ## Authorized follow-up implemented on 30 October 2026
 
 The user authorized the MC workflow and alignment of circumcision/Hajj/Umra to the supplied rules. Those prior gaps are now addressed by the MC receipt/verification/notification and HR-review workflow, five-day circumcision entitlement for either parent per occasion excluding holidays, and contextual pilgrimage eligibility/travel/balance calculations. See leave-policy.md for the active profile. Older records are flagged for review rather than rewritten. The comparison below records the initial findings; service-year cycles, full shift handling and other unselected provisions remain outstanding. The supplied 2014 English text is the explicitly selected rules basis for these categories, not a verified current consolidation of every amendment.

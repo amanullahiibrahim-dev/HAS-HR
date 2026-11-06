@@ -27,10 +27,21 @@ if (deviceIp && !privateDeviceIPv4 && !privateDeviceIPv6) {
   throw new Error("ZKTECO_DEVICE_IP must be one specific private LAN IP address.");
 }
 
-const app = next({ dev: false, hostname, port });
+const appDirectory = process.env.HAAZIR_APP_DIR || process.cwd();
+const publicUrl = process.env.HAAZIR_PUBLIC_URL ? new URL(process.env.HAAZIR_PUBLIC_URL) : null;
+if (publicUrl && publicUrl.protocol !== "https:") throw new Error("HAAZIR_PUBLIC_URL must use HTTPS.");
+const app = next({ dev: false, hostname, port, dir: appDirectory });
 await app.prepare();
 const handle = app.getRequestHandler();
 createServer((request, response) => {
+  // Redirect only the configured phone-facing host, keeping local device/sync traffic intact.
+  const forwardedProtocol = request.headers["x-forwarded-proto"]?.split(",")[0].trim();
+  if (publicUrl && request.headers.host === publicUrl.host && forwardedProtocol !== "https") {
+    const target = new URL(request.url || "/", publicUrl);
+    if (target.origin !== publicUrl.origin) { response.writeHead(400); response.end("Invalid request path."); return; }
+    response.writeHead(307, { location: target.toString(), "cache-control": "no-store" });
+    response.end();return;
+  }
   if (request.url?.startsWith("/iclock/")) {
     const remoteIp = (request.socket.remoteAddress || "").replace(/^::ffff:/i, "");
     if (!deviceIp) {

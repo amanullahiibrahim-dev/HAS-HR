@@ -1,13 +1,13 @@
-# Administrator attendance corrections
+# Attendance corrections
 
-In Attendance, open a day's View and choose Correct attendance, or use the Correct attendance button to add a missed punch. Choose staff and attendance date, enter the correct arrival time, optionally correct checkout, and supply a reason. Blank checkout preserves the current checkout and allows subsequent machine checkout logs to flow through.
+In Attendance, choose Correct attendance, select a staff member and attendance date, and enter the correction reason. Administrators can add or correct an in-punch, an out-punch, or both. Each supplied time is a same-day `HH:mm` value. When a time is omitted, its current effective value is preserved. When both effective times are known, the out-punch must be later than the in-punch.
 
-The authenticated administrator endpoint appends a correction to `corrections` in the server data store. It no longer deletes or replaces raw punch records. Each correction includes the staff ID, day, server-generated timestamp and ID, account actor, mandatory reason, effective before/after times, changed fields, and snapshots of original punch evidence. A second correction appends another revision. No API is provided to edit or delete an audit event. Reports recalculate present/late using corrected times and label corrected attendance; CSV exports contain the latest correction's actor, timestamp and reason. Day details show the full correction history.
+Corrections are kept separately from original machine punches. They recalculate attendance status, worked hours and late minutes without fabricating or overwriting a machine log. An out-punch entered without an in-punch leaves the day incomplete and records no worked time. A later device punch can fill an omitted time; a time explicitly corrected by the administrator remains effective.
+
+Every correction records its reason, staff ID, date, administrator actor, timestamp, supplied changes, before/after snapshots, and original punch evidence. Correction history is visible for the selected staff member and date. Empty reasons, invalid dates or times, unchanged explicit time changes, and stale forms are rejected. Saving another correction appends history.
+
+Reason-only notes remain supported. The authenticated endpoint appends them with `noteOnly: true` and an empty `changes` object. They do not change attendance or undo earlier corrections, and a note on a day without punches does not create an attendance row. No verification reference is required; existing supplied references remain in their audit records.
 
 The existing login is a shared Administrator account. Attribution records that account; it cannot identify which individual used a shared password. Audit data is stored with the application data and must be backed up. This file store is not tamper-proof against someone who can directly edit server files.
 
-A stale form is rejected when the effective times or correction revision have changed. Review the updated day and reopen the form before retrying. The current correction form handles same-day attendance; checkout must be later than arrival. New corrections do not fabricate biometric verification events or alter fingerprint templates or the original ZKTeco software.
-
-Earlier versions' legacy manual entries are displayed as Legacy manual. Logs previously deleted by those versions cannot be reconstructed by this feature.
-
-Run `node --test tests/attendance-corrections.test.cjs` for correction regression checks.
+Run `node --test tests/attendance-corrections.test.cjs tests/attendance-partial-corrections.test.cjs` for correction regression checks.

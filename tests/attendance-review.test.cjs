@@ -1,0 +1,19 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
+const cache={};function load(n){if(cache[n])return cache[n];const exports={};cache[n]=exports;vm.runInNewContext(ts.transpileModule(fs.readFileSync('lib/'+n+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,{exports,require:x=>x.startsWith('./')?load(x.slice(2)):require(x),process,Buffer,Date,Map,Set});return exports;}
+const {attendanceForClient,addAttendanceCorrection}=load('attendance');
+const now=Date.parse('2026-11-05T07:00:00Z');
+const punch=(id,time,kind='attendance-in',date='2026-11-05')=>({id,employeeId:'A',pin:'01',serial:'TEST',timestamp:date+' '+time,kind,state:kind==='attendance-in'?0:1,verify:'1',workCode:''});
+const store=logs=>({people:[{id:'A',name:'Staff',role:'Teacher',devicePin:'01'}],leaves:[],punches:logs,device:{count:logs.length,lastSeen:null,serial:'TEST'}});
+test('duplicate IN and OUT each trigger immediate review even with a complete pair',()=>{
+ for(const kind of ['attendance-in','attendance-out']){const s=store([punch('IN','06:55:00'),punch('OUT','14:00:00','attendance-out'),punch('EXTRA',kind==='attendance-in'?'06:57:00':'14:01:00',kind)]);const raw=JSON.stringify(s.punches),row=attendanceForClient(s,now)[0];assert.equal(row.status,'Incomplete');assert.match(row.note,kind==='attendance-in'?/2 IN punches/:/2 OUT punches/);assert.equal(JSON.stringify(s.punches),raw);s.punches[2].denied={at:'now',actor:'Administrator',reason:'Extra punch'};assert.equal(attendanceForClient(s,now)[0].status,'Present');}
+});
+test('missing OUT changes to review exactly at Maldives midnight, not before',()=>{
+ const s=store([punch('IN','06:55:00')]);assert.equal(attendanceForClient(s,Date.parse('2026-11-05T18:59:59Z'))[0].status,'Present');const row=attendanceForClient(s,Date.parse('2026-11-05T19:00:00Z'))[0];assert.equal(row.status,'Incomplete');assert.match(row.note,/OUT punch is missing after the end of the day/);
+});
+test('past checkout-only days require review, and correcting the missing IN resolves it',()=>{
+ const s=store([punch('OUT','14:00:00','attendance-out','2026-11-04')]);const row=attendanceForClient(s,now)[0];assert.equal(row.status,'Incomplete');assert.match(row.note,/IN punch is missing/);addAttendanceCorrection(s,{employeeId:'A',date:'2026-11-04',checkIn:'06:55',reason:'Verified arrival',expected:{checkIn:row.checkIn,checkOut:row.checkOut,correctionId:row.correctionId}},'C','now');assert.equal(attendanceForClient(s,now)[0].status,'Present');
+});
+test('denied duplicates are ignored, import replays are deduplicated, and correction does not conceal active duplicates',()=>{
+ const s=store([punch('IN','06:55:00'),punch('IN2','06:57:00'),punch('OUT','14:00:00','attendance-out')]);const row=attendanceForClient(s,now)[0];addAttendanceCorrection(s,{employeeId:'A',date:'2026-11-05',checkIn:'06:50',reason:'Verified arrival',expected:{checkIn:row.checkIn,checkOut:row.checkOut,correctionId:row.correctionId}},'C','now');assert.equal(attendanceForClient(s,now)[0].status,'Incomplete');s.punches[1].denied={at:'now',actor:'Administrator',reason:'Extra'};assert.equal(attendanceForClient(s,now)[0].status,'Present');const other=store([]),p=load('punches').normalizePunch({pin:'01',serial:'TEST',timestamp:'2026-11-05 06:55:00',state:0,eventType:'ATT IN'});load('punches').ingestPunches(other,[p,p]);assert.equal(other.punches.length,1);assert.equal(attendanceForClient(other,now)[0].status,'Present');
+});
+test('the review status is labelled Punch review needed in attendance',()=>{const source=fs.readFileSync('public/app.js','utf8'),c={esc:String};vm.createContext(c);vm.runInContext(source.slice(source.indexOf('function attStatusTag('),source.indexOf('function renderAttChart(')),c);assert.match(c.attStatusTag({status:'Incomplete'}),/Punch review needed/);});

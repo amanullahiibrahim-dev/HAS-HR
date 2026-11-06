@@ -1,5 +1,5 @@
 export function requiredArrival(role: string): string {
-  return ["Teacher", "Technical Staff", "Support Staff", "Deputy Principal"].includes(role) ? "07:00" : "08:00";
+  return ["Teacher", "Leading Teacher", "Technical Staff", "Support Staff", "Deputy Principal"].includes(role) ? "07:00" : "08:00";
 }
 
 export const offDays = [5, 6]; // Friday and Saturday (JavaScript weekday numbers).

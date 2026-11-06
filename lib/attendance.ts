@@ -17,7 +17,10 @@ export type AttendanceCorrection = {
 
   actor: "Administrator"; reason: string; evidence?: string;
 
-  changes: { checkIn: string; checkOut?: string };
+  noteOnly?: boolean;
+  denied?: {checkIn?: {at:string;actor:"Administrator";reason:string};checkOut?: {at:string;actor:"Administrator";reason:string}};
+
+  changes: { checkIn?: string; checkOut?: string };
 
   before: { checkIn: string; checkOut: string };
 
@@ -29,7 +32,7 @@ export type AttendanceCorrection = {
 
 
 
-export function attendanceForClient(store: Store) {
+export function attendanceForClient(store: Store, now = Date.now()) {
   initializePunchOwnership(store);
 
   const days = new Map<string,{employeeId:string;name:string;date:string;checkIn:string;checkOut:string;source:string;correctionId:string|null;originalCheckIn:string;originalCheckOut:string;note:string;punches:Punch[]}>();
@@ -64,21 +67,25 @@ export function attendanceForClient(store: Store) {
 
     const person=store.people.find(p=>p.id===correction.employeeId);if(!person)continue;
 
+    const applyIn=correction.changes.checkIn!==undefined&&!correction.denied?.checkIn;
+    const applyOut=correction.changes.checkOut!==undefined&&!correction.denied?.checkOut;
+    if(correction.noteOnly || (!applyIn&&!applyOut))continue;
+
     const key=`${person.id}|${correction.date}`;
 
     const row=days.get(key)||{employeeId:person.id,name:person.name,date:correction.date,checkIn:'—',checkOut:'—',source:'Administrator correction',correctionId:null,originalCheckIn:'—',originalCheckOut:'—',note:'',punches:[]};
 
-    row.checkIn=correction.changes.checkIn;
+    if(applyIn)row.checkIn=correction.changes.checkIn!;
 
-    if(correction.changes.checkOut!==undefined)row.checkOut=correction.changes.checkOut;
+    if(applyOut)row.checkOut=correction.changes.checkOut!;
 
     row.source='Administrator correction';row.note='';row.correctionId=correction.id;days.set(key,row);
 
   }
 
-  const today=new Date(Date.now()+5*60*60*1000).toISOString().slice(0,10);
+  const today=new Date(now+5*60*60*1000).toISOString().slice(0,10);
 
-  for(const leave of store.leaves.filter(l=>l.type==="Duty travel"&&["Approved","Completed"].includes(l.status)&&l.duty?.fullDayRelease&&l.duty.approvalReference)){
+  for(const leave of store.leaves.filter(l=>l.type==="Duty travel"&&["Approved","Completed"].includes(l.status))){
 
     const person=store.people.find(p=>p.id===leave.employeeId);if(!person)continue;
 
@@ -98,7 +105,20 @@ export function attendanceForClient(store: Store) {
 
     const hasIn=row.checkIn!=="—";
 
-    const status=duty?"On duty":!hasIn?"Incomplete":isLateArrival(store.people.find(p=>p.id===row.employeeId)!.role,row.checkIn,row.date,store.holidays || [])?"Late":"Present";
+    const hasOut=row.checkOut!=="—";
+    const active=row.punches.filter(p=>!p.denied);
+    const inCount=active.filter(p=>p.kind==="attendance-in").length;
+    const outCount=active.filter(p=>p.kind==="attendance-out").length;
+    const reasons:string[]=[];
+    if(inCount>1)reasons.push(`${inCount} IN punches received; deny the extra log(s).`);
+    if(outCount>1)reasons.push(`${outCount} OUT punches received; deny the extra log(s).`);
+    if(!duty&&row.date<today){
+      if(!hasIn)reasons.push("IN punch is missing after the end of the day.");
+      if(!hasOut)reasons.push("OUT punch is missing after the end of the day.");
+    }
+    const needsReview=reasons.length>0||(!duty&&!hasIn);
+    const status=needsReview?"Incomplete":duty?"Present":isLateArrival(store.people.find(p=>p.id===row.employeeId)!.role,row.checkIn,row.date,store.holidays || [])?"Late":"Present";
+    if(reasons.length)row.note=[...reasons,row.note].filter(Boolean).join(" ");
 
     const minute=(time:string)=>Number(time.slice(0,2))*60+Number(time.slice(3,5));
 
@@ -120,7 +140,7 @@ export function attendanceForClient(store: Store) {
 
 export function addAttendanceCorrection(store: Store, input: unknown, id: string, createdAt: string) {
 
-  if(!input || typeof input!=='object')throw new Error('Enter staff, date, corrected time and reason.');
+  if(!input || typeof input!=='object')throw new Error('Enter staff, date and reason.');
 
   const entry=input as Record<string,unknown>;
 
@@ -128,7 +148,10 @@ export function addAttendanceCorrection(store: Store, input: unknown, id: string
 
   const time=(value:unknown):value is string=>typeof value==='string'&&/^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 
-  if(!person || typeof entry.date!=='string'||!validLeaveDate(entry.date)||!time(entry.checkIn))throw new Error('Choose staff and enter a valid attendance date and check-in time.');
+  const noteOnly=entry.noteOnly===true || (entry.checkIn===undefined && entry.checkOut===undefined);
+  if(!person || typeof entry.date!=='string'||!validLeaveDate(entry.date))throw new Error('Choose staff and enter a valid attendance date.');
+  if(noteOnly && (entry.checkIn!==undefined || entry.checkOut!==undefined))throw new Error('A correction note cannot change punch times.');
+  if(entry.checkIn!==undefined && !time(entry.checkIn))throw new Error('Enter a valid check-in time, or leave it blank to keep the existing check-in.');
 
   const reason=typeof entry.reason==='string'?entry.reason.trim():'';
 
@@ -136,7 +159,7 @@ export function addAttendanceCorrection(store: Store, input: unknown, id: string
 
   const evidence=typeof entry.evidence==='string'?entry.evidence.trim():'';
 
-  if(!evidence||evidence.length>1000)throw new Error('Record evidence of punctual attendance or a verification reference (maximum 1,000 characters).');
+  if(evidence.length>1000)throw new Error('Verification reference must be at most 1,000 characters.');
 
   if(entry.checkOut!==undefined&&!time(entry.checkOut))throw new Error('Enter a valid checkout time, or leave it blank to keep the existing checkout.');
 
@@ -148,13 +171,13 @@ export function addAttendanceCorrection(store: Store, input: unknown, id: string
 
   if(!expected||expected.checkIn!==before.checkIn||expected.checkOut!==before.checkOut||expected.correctionId!==(current?.correctionId||null))throw new Error('Attendance changed since this form was opened. Reopen it and review the latest times.');
 
-  const after={checkIn:entry.checkIn,checkOut:typeof entry.checkOut==='string'?entry.checkOut:before.checkOut};
+  const after=noteOnly?{...before}:{checkIn:typeof entry.checkIn==='string'?entry.checkIn:before.checkIn,checkOut:typeof entry.checkOut==='string'?entry.checkOut:before.checkOut};
 
-  if(after.checkOut!=='—'&&after.checkOut<=after.checkIn)throw new Error('Checkout must be after check-in for a same-day correction.');
+  if(!noteOnly&&after.checkIn!=='—'&&after.checkOut!=='—'&&after.checkOut<=after.checkIn)throw new Error('Checkout must be after check-in for a same-day correction.');
 
-  if(before.checkIn===after.checkIn&&before.checkOut===after.checkOut)throw new Error('Enter a changed attendance time before saving.');
+  if(!noteOnly&&before.checkIn===after.checkIn&&before.checkOut===after.checkOut)throw new Error('Enter a changed attendance time before saving.');
 
-  const correction:AttendanceCorrection={id,employeeId:person.id,date:entry.date,actor:'Administrator',createdAt,reason,evidence,changes:{checkIn:entry.checkIn,...(typeof entry.checkOut==='string'?{checkOut:entry.checkOut}:{})},before,after,
+  const correction:AttendanceCorrection={id,employeeId:person.id,date:entry.date,actor:'Administrator',createdAt,reason,...(evidence?{evidence}:{}),...(noteOnly?{noteOnly:true}:{}),changes:noteOnly?{}:{...(typeof entry.checkIn==='string'?{checkIn:entry.checkIn}:{}),...(typeof entry.checkOut==='string'?{checkOut:entry.checkOut}:{})},before,after,
 
     originalPunches:store.punches.filter(p=>p.employeeId===person.id&&p.timestamp.slice(0,10)===entry.date).map(p=>({...p}))};
 

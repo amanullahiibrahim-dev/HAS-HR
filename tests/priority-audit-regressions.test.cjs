@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
 function harness(){
  const cache={},store={people:[{id:'A',name:'Staff A',role:'Admin Staff',devicePin:'01',annual:30,medical:0,casual:0}],punches:[],leaves:[],holidays:[],device:{lastSeen:null,serial:'TEST',count:0}};
- const mocks={'next/server':{NextResponse:{json:(data,options)=>Response.json(data,options)}},'@/lib/auth':{isAdmin:()=>true,isSameOrigin:()=>true}};
+ const mocks={'next/server':{NextResponse:{json:(data,options)=>Response.json(data,options)}},'@/lib/auth':{isAdmin:()=>true,isSignedIn:()=>true,currentSession:()=>true?{kind:'admin'}:null,isSameOrigin:()=>true}};
  function load(name){if(cache[name])return cache[name];const exports={};cache[name]=exports;vm.runInNewContext(ts.transpileModule(fs.readFileSync(name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,{exports,require:n=>mocks[n]||(n.startsWith('@/')?load(n.slice(2)):n.startsWith('./')?load('lib/'+n.slice(2)):require(n)),Date,Map,Set,process,Buffer,Response,URL});return exports;}
  const actual=load('lib/store');cache['lib/store']={...actual,readStore:()=>store,writeStore:()=>{},makeId:()=> 'FIXTURE-ID'};
  const route=load('app/api/state/route');
@@ -21,7 +21,7 @@ test('start-day IN cannot erase a one-day leave and review is visible to the adm
  h.load('lib/punches').ingestPunches(h.store,[log(h,'2026-10-05','07:20:00','ATT IN')]);assert.equal(l.status,'Completed');assert.equal(l.usedDays,1);assert.equal(l.returnedAt,'2026-10-05 07:20:00');
 });
 test('late return charges only authorized days and excess days show absence in daily and period reports',()=>{
- const h=harness(),l=leave(h);h.load('lib/punches').ingestPunches(h.store,[log(h,'2026-10-04','09:00:00','OT IN'),log(h,'2026-10-12','07:20:00','ATT IN')]);assert.equal(l.usedDays,2);assert.equal(l.returnedAt,'2026-10-12 07:20:00');assert.match(h.load('lib/store').stateForClient(h.store).leaves[0].returnReview,/after approved/);
+ const h=harness(),l=leave(h);h.load('lib/punches').ingestPunches(h.store,[log(h,'2026-10-04','09:00:00','OT IN'),log(h,'2026-10-12','07:20:00','ATT IN'),log(h,'2026-10-12','16:00:00','ATT OUT')]);assert.equal(l.usedDays,2);assert.equal(l.returnedAt,'2026-10-12 07:20:00');assert.match(h.load('lib/store').stateForClient(h.store).leaves[0].returnReview,/after approved/);
  const rows=browser(h,['2026-10-05','2026-10-06','2026-10-07','2026-10-09','2026-10-12']);assert.equal(rows[0].status,'On leave');assert.equal(rows[1].status,'Absent');assert.equal(rows[2].status,'Absent');assert.equal(rows[3].status,'Weekend');assert.equal(rows[4].status,'Present');
 });
 test('same-day completed leave recalculation does not remove a full working-day charge',()=>{

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./mobile.css";
 import "./modern.css";
+import "./theme-user.css";
 
 export const metadata: Metadata = {
   title: "Haaziry — Attendance & Leave",
@@ -11,6 +12,6 @@ export const metadata: Metadata = {
 export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#246b4c" };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body>{children}</body></html>;
+  return <html lang="en-GB"><body>{children}</body></html>;
 }
 

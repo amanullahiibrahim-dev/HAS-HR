@@ -18,6 +18,10 @@ export function permanentlyRemoveEmployee(store: Store, id: string, now = Date.n
   store.pinAssignments=(store.pinAssignments || []).filter(assignment=>assignment.employeeId!==id);
   store.people = store.people.filter(employee => employee.id !== id);
   store.leaves = store.leaves.filter(leave => leave.employeeId !== id);
+  store.disciplinaryActions=(store.disciplinaryActions||[]).filter(record=>record.employeeId!==id);
+  store.disciplinaryChanges=(store.disciplinaryChanges||[]).filter(change=>change.after.employeeId!==id);
+  store.supervisorAssignments=(store.supervisorAssignments||[]).filter(record=>record.employeeId!==id&&!(record.supervisor.kind==="staff"&&record.supervisor.id===id));
+  store.supervisorChanges=(store.supervisorChanges||[]).filter(change=>change.after.employeeId!==id&&!(change.after.supervisor.kind==="staff"&&change.after.supervisor.id===id)&&!(change.before?.supervisor.kind==="staff"&&change.before.supervisor.id===id));
   store.leaveDeletions=(store.leaveDeletions || []).filter(receipt=>receipt.employeeId!==id);
   store.corrections = (store.corrections || []).filter(correction => correction.employeeId !== id);
   store.leaveChanges = (store.leaveChanges || []).filter(change => !leaveIds.has(change.leaveId) && change.before.employeeId !== id && change.after.employeeId !== id);

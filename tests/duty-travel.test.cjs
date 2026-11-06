@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
 function harness(){
  let writes=0;const cache={},store={people:[{id:'A',name:'Test Admin',role:'Admin Staff',devicePin:'01',annual:0,medical:0,casual:0,workStart:'08:00'}],leaves:[],punches:[],holidays:['2026-10-30'],device:{lastSeen:null,serial:null,count:0}};
- const mock={'next/server':{NextResponse:{json:(data,options)=>Response.json(data,options)}},'@/lib/auth':{isAdmin:()=>true,isSameOrigin:()=>true}};
+ const mock={'next/server':{NextResponse:{json:(data,options)=>Response.json(data,options)}},'@/lib/auth':{isAdmin:()=>true,isSignedIn:()=>true,currentSession:()=>true?{kind:'admin'}:null,isSameOrigin:()=>true}};
  function load(name){if(cache[name])return cache[name];const exports={};cache[name]=exports;vm.runInNewContext(ts.transpileModule(fs.readFileSync(name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,{exports,require:n=>mock[n]||(n.startsWith('@/')?load(n.slice(2)):n.startsWith('./')?load('lib/'+n.slice(2)):require(n)),Date,Map,Set,process,Buffer,Response,URL,Intl});return exports;}
  const actual=load('lib/store');cache['lib/store']={...actual,readStore:()=>store,writeStore:()=>{writes++;},makeId:()=>String(writes+1)};
  const route=load('app/api/state/route'),preview=load('app/api/leave-preview/route');
@@ -16,7 +16,7 @@ test('official duty uses authorized calendar dates, includes weekends and holida
 });
 test('duty preview and save agree and ignore forged duration, pay basis and balance charge',async()=>{
  const h=harness(),payload=input({days:999,chargeType:'Annual',payBasis:'No pay'});
- const preview=await h.preview({employeeId:'A',type:'Duty travel',start:payload.start,days:'999',duty:JSON.stringify(payload.duty)});assert.equal(preview.status,200);const plan=await preview.json();assert.equal(plan.days,3);assert.equal(plan.readOnlyDays,true);assert.equal(plan.entitlement,null);assert.equal(plan.available,null);
+ const preview=await h.preview({employeeId:'A',type:'Duty travel',start:payload.start,days:'999',duty:JSON.stringify(payload.duty)});assert.equal(preview.status,200);const plan=await preview.json();assert.equal(plan.days,3);assert.equal(plan.readOnlyDays,false);assert.equal(plan.entitlement,null);assert.equal(plan.available,null);
  const response=await h.send({action:'leave.create',leave:payload});assert.equal(response.status,200);const state=await response.json();assert.equal(state.leaves[0].end,plan.end);assert.equal(state.leaves[0].days,3);assert.equal(state.leaves[0].chargeType,'None');assert.equal(state.people[0].annual,0);assert.equal(h.load('lib/leave-policy').usedDaysForType(h.store.leaves,'A','Annual'),0);
 });
 test('missing authorization, purpose, invalid dates or times and unconfirmed full-day release cannot save',async()=>{
@@ -26,15 +26,15 @@ test('missing authorization, purpose, invalid dates or times and unconfirmed ful
  const h=harness();assert.equal((await h.send({action:'leave.create',leave:input({start:'2026-10-31',duty:{...duty(),endTime:'07:00'}})})).status,400);
 });
 test('pending or declined duty does not excuse late punches; approved duty preserves raw times without late status',async()=>{
- const h=harness();h.store.punches=[{id:'P',pin:'01',serial:'ZK',timestamp:'2026-10-29 08:45:00',state:0,kind:'attendance-in',verify:'1',workCode:''}];const raw=JSON.stringify(h.store.punches, (key,value)=>key==='employeeId'?undefined:value);
+ const h=harness();h.store.punches=[{id:'P',pin:'01',serial:'ZK',timestamp:'2026-10-29 08:45:00',state:0,kind:'attendance-in',verify:'1',workCode:''},{id:'P-OUT',pin:'01',serial:'ZK',timestamp:'2026-10-29 16:00:00',state:0,kind:'attendance-out',verify:'1',workCode:''}];const raw=JSON.stringify(h.store.punches, (key,value)=>key==='employeeId'?undefined:value);
  await h.send({action:'leave.create',leave:input({status:'Pending'})});assert.equal(h.load('lib/attendance').attendanceForClient(h.store)[0].status,'Late');
- const response=await h.send({action:'leave.decision',id:h.store.leaves[0].id,status:'Approved'});assert.equal(response.status,200);const state=await response.json(),row=state.attendance.find(r=>r.date==='2026-10-29');assert.equal(row.status,'On duty');assert.equal(row.checkIn,'08:45');assert.equal(row.originalCheckIn,'08:45');assert.equal(JSON.stringify(h.store.punches, (key,value)=>key==='employeeId'?undefined:value),raw);assert.equal(state.attendance.find(r=>r.date==='2026-10-30').status,'On duty');
+ const response=await h.send({action:'leave.decision',id:h.store.leaves[0].id,status:'Approved'});assert.equal(response.status,200);const state=await response.json(),row=state.attendance.find(r=>r.date==='2026-10-29');assert.equal(row.status,'Present');assert.equal(row.checkIn,'08:45');assert.equal(row.originalCheckIn,'08:45');assert.equal(JSON.stringify(h.store.punches, (key,value)=>key==='employeeId'?undefined:value),raw);assert.equal(state.attendance.find(r=>r.date==='2026-10-30').status,'Present');
  h.store.leaves[0].status='Declined';assert.equal(h.load('lib/attendance').attendanceForClient(h.store)[0].status,'Late');
 });
 test('server and browser agree on duty status, with no invented machine time or late minutes',async()=>{
  const h=harness();await h.send({action:'leave.create',leave:input()});const state=h.load('lib/store').stateForClient(h.store),source=fs.readFileSync('public/app.js','utf8');
  const context={db:state,attState:{staff:'all'},eachDate:()=>['2026-10-29','2026-10-30'],iso:d=>new Date(d).toISOString().slice(0,10),today:new Date('2026-11-03'),staffStart:()=> '08:00',minutesBetween:()=>0,Date,Map};vm.createContext(context);vm.runInContext(source.slice(source.indexOf('function buildAttendanceRows('),source.indexOf('function attStatusTag(')),context);
- const rows=context.buildAttendanceRows();assert.equal(rows.length,2);for(const row of rows){assert.equal(row.status,'On duty');assert.equal(row.lateMins,0);assert.equal(row.checkIn,'—');assert.equal(row.checkOut,'—');assert.equal(row.leave,'');}
+ const rows=context.buildAttendanceRows();assert.equal(rows.length,2);for(const row of rows){assert.equal(row.status,'Present');assert.equal(row.lateMins,0);assert.equal(row.checkIn,'—');assert.equal(row.checkOut,'—');assert.equal(row.leave,'');}
 });
 test('duty and personal leave cannot overlap in either direction; distinct assignments have no cumulative 30-day limit',async()=>{
  const h=harness();await h.send({action:'leave.create',leave:input()});
@@ -57,4 +57,15 @@ test('incidental and post-travel office punches do not silently replace the requ
 test('completed duty edits cannot extend beyond the recorded completion report',async()=>{
  const h=harness();await h.send({action:'leave.create',leave:input({start:'2026-10-26',duty:{...duty(),lastDate:'2026-10-28'}})});const id=h.store.leaves[0].id;await h.send({action:'leave.duty.complete',id,expectedRevision:0,reportedAt:'2026-10-29T08:00',reportReference:'Officer log 1'});
  const before=JSON.stringify(h.store.leaves[0]);const response=await h.send({action:'leave.update',id,expectedRevision:1,editReason:'Extending assignment',leave:input({start:'2026-10-26',status:'Completed',duty:{...duty(),lastDate:'2026-10-30'}})});assert.equal(response.status,400);assert.equal(JSON.stringify(h.store.leaves[0]),before);
+});
+
+
+test('simple duty travel uses Days and start, saves without crossed fields, and counts as present without punches',async()=>{
+ const h=harness(),payload=input({days:3,duty:undefined});
+ const preview=await h.preview({employeeId:'A',type:'Duty travel',start:payload.start,days:'3'});
+ assert.equal(preview.status,200);const plan=await preview.json();assert.equal(plan.end,'2026-11-01');assert.equal(plan.readOnlyDays,false);
+ const response=await h.send({action:'leave.create',leave:{...payload,end:plan.end}});assert.equal(response.status,200);
+ const state=await response.json();assert.equal(state.leaves[0].days,3);assert.equal(state.leaves[0].duty.lastDate,'2026-10-31');
+ assert.equal(state.attendance.length,3);assert.ok(state.attendance.every(row=>row.status==='Present'&&row.checkIn==='—'&&row.lateMins===0));
+ for(const days of [0,-1,1.5,367])assert.equal((await harness().send({action:'leave.create',leave:input({days,duty:undefined})})).status,400);
 });

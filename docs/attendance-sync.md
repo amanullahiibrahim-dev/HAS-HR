@@ -32,7 +32,7 @@ The initial check cannot be completed until the real terminal IP and COMM key ar
 - Preserves terminal wall-clock time without conversion to UTC, preserves string PINs, and uses the original numeric punch code rather than the package's labels. UDP devices may return numeric PINs; leading zeros cannot be recovered from a numeric record.
 - Create each staff record with the exact machine PIN. Unmapped logs are retained until the matching staff record exists.
 - Do not infer IN/OUT labels from numeric code 0: this installation receives code 0 even on checkout punches. Unlabelled punches are flagged for review, regardless of their count. Confirmed attendance IN after the leave start date closes approved personal leave; punches on the start date require administrator review and cannot cancel a full-day leave automatically. Overtime and checkout-only records do not finish leave. Missing/invalid raw punch codes are rejected.
-- Successful imports update the device connection indicator, including an empty terminal. The receiver accepts a device serial only when every event matches it and it matches `ZKTECO_DEVICE_SN` if set.
+- Successful imports update the device connection indicator, including an empty terminal. The receiver accepts a device serial only when every event matches it and it matches the required `ZKTECO_DEVICE_SN`. Every individual log must match this configured serial even when the optional batch `deviceSerial` is omitted. Imports are disabled until the terminal serial is configured.
 
 ## Existing attendance software alternative
 

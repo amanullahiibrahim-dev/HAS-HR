@@ -21,7 +21,7 @@ test('documents are bound to staff and cannot attach to leave without MC',()=>{
   assert.throws(()=>lib.mcFilePath('../../secrets'));assert.throws(()=>lib.mcFilePath('filename.pdf'));
 });
 function harness(){let authenticated=true,sameOrigin=true;const store={people:[{id:'A'}],mcDocuments:[]};
-  const mock={'next/server':{NextResponse:{json:(v,o)=>new Response(JSON.stringify(v),{status:o?.status||200})}},'@/lib/auth':{isAdmin:()=>authenticated,isSameOrigin:()=>sameOrigin},'@/lib/store':{readStore:()=>store,writeStore:()=>{},makeId:()=>{const id=crypto.randomUUID();created.push(lib.mcFilePath(id));return id;}}};
+  const mock={'next/server':{NextResponse:{json:(v,o)=>new Response(JSON.stringify(v),{status:o?.status||200})}},'@/lib/auth':{isAdmin:()=>authenticated,isSignedIn:()=>authenticated,currentSession:()=>authenticated?{kind:'admin'}:null,isSameOrigin:()=>sameOrigin},'@/lib/store':{readStore:()=>store,writeStore:()=>{},makeId:()=>{const id=crypto.randomUUID();created.push(lib.mcFilePath(id));return id;}}};
   const load=loader(mock),upload=load('app/api/mc-documents/route'),download=load('app/api/mc-documents/[id]/route');
   return {store,upload:upload.POST,download:download.GET,deny:()=>{authenticated=false;},crossOrigin:()=>{sameOrigin=false;}};
 }

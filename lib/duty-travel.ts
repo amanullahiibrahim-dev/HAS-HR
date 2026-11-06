@@ -4,11 +4,18 @@ import type { Leave, Store } from "./store";
 export type DutyTravelDetails = {
   destination: string; purpose: string; approvalReference: string; lastDate: string;
   startTime: string; endTime: string; fullDayRelease: true;
-  reportedAt?: string; reportReference?: string;
+  simplified?: boolean; reportedAt?: string; reportReference?: string;
 };
 const validTime = (value: unknown): value is string => typeof value === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 const nextDate = (date: string) => new Date(Date.parse(date + "T00:00:00Z") + 86400000).toISOString().slice(0,10);
-export function planDutyTravel(start: string, input: unknown) {
+export function planDutyTravel(start: string, input: unknown, requestedDays?: number) {
+  if (!input || (typeof input === "object" && (input as Record<string,unknown>).simplified === true)) {
+    if (!validLeaveDate(start) || !Number.isInteger(requestedDays) || requestedDays! < 1 || requestedDays! > 366) throw new Error("Enter a valid start date and between 1 and 366 whole calendar days.");
+    const days=requestedDays!, end=new Date(Date.parse(start+"T00:00:00Z")+days*86400000).toISOString().slice(0,10);
+    const previous=(input || {}) as Partial<DutyTravelDetails>;
+    const duty: DutyTravelDetails={destination:previous.destination||"",purpose:previous.purpose||"",approvalReference:previous.approvalReference||"",startTime:previous.startTime||"",endTime:previous.endTime||"",lastDate:new Date(Date.parse(end+"T00:00:00Z")-86400000).toISOString().slice(0,10),fullDayRelease:true,simplified:true};
+    return {days,end,duty,chargeType:"None",payBasis:"Official duty",trip:undefined};
+  }
   if (!input || typeof input !== "object") throw new Error("Enter the official duty travel details.");
   const value = input as Record<string, unknown>;
   const text = (key: string, label: string, max: number) => {
@@ -25,7 +32,7 @@ export function planDutyTravel(start: string, input: unknown) {
   return { days, end, duty, chargeType: "None", payBasis: "Official duty", trip: undefined };
 }
 export function dutyForDate(store: Store, employeeId: string, date: string) {
-  return store.leaves.find(leave => leave.employeeId === employeeId && leave.type === "Duty travel" && ["Approved", "Completed"].includes(leave.status) && leave.duty?.fullDayRelease && !!leave.duty.approvalReference && leave.start <= date && date < leave.end);
+  return store.leaves.find(leave => leave.employeeId === employeeId && leave.type === "Duty travel" && ["Approved", "Completed"].includes(leave.status) && leave.start <= date && date < leave.end);
 }
 export function checkDutyOverlap(store: Store, employeeId: string, type: string, start: string, end: string, status: string, excludeId?: string) {
   if (status === "Declined") return;
@@ -35,6 +42,6 @@ export function dutyReport(leave: Leave, reportedAt: unknown, reportReference: u
   if (leave.type !== "Duty travel" || leave.status !== "Approved" || !leave.duty) throw new Error("Choose an approved duty travel record.");
   const reference = typeof reportReference === "string" ? reportReference.trim() : "";
   if (!reference || reference.length > 300) throw new Error("Enter the attendance officer's report / acknowledgement reference (maximum 300 characters).");
-  if (typeof reportedAt !== "string" || !/^\d{4}-\d\d-\d\dT([01]\d|2[0-3]):[0-5]\d$/.test(reportedAt) || !validLeaveDate(reportedAt.slice(0,10)) || reportedAt < leave.duty.lastDate + "T" + leave.duty.endTime || Date.parse(reportedAt + "+05:00") > now) throw new Error("Enter the actual reporting time after completion of the approved duty, in Maldives time. For an early return, update the approved duty period first.");
+  if (typeof reportedAt !== "string" || !/^\d{4}-\d\d-\d\dT([01]\d|2[0-3]):[0-5]\d$/.test(reportedAt) || !validLeaveDate(reportedAt.slice(0,10)) || reportedAt < leave.duty.lastDate + "T" + (leave.duty.endTime || "00:00") || Date.parse(reportedAt + "+05:00") > now) throw new Error("Enter the actual reporting time after completion of the approved duty, in Maldives time. For an early return, update the approved duty period first.");
   return { ...leave.duty, reportedAt, reportReference: reference };
 }

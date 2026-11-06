@@ -1,0 +1,15 @@
+/* Purple theme for system users (applied by public/app.js when a non-Administrator signs in). Status colours stay green/red. */
+html.theme-user{--green:#6d3fc0;--green-dark:#55309a;--green2:#f0eafb;--lime:#d9c8f5;--forest:#1e1433;--forest-2:#2b1d47;--focus:#6d3fc0;--canvas:#f6f4fa;--canvas-2:#faf9fd;--line:#e6e1ee;--line-strong:#d4cce2}
+html.theme-user .btn.primary{box-shadow:0 1px 0 #ffffff1f inset,0 4px 12px -6px #6d3fc080}
+html.theme-user .filter:focus,html.theme-user .field input:focus,html.theme-user .field select:focus,html.theme-user .field textarea:focus,html.theme-user .staff-search-bar input:focus,html.theme-user .report-unit-control:focus-within{box-shadow:0 0 0 3px #6d3fc024}
+html.theme-user .report-unit-tag{border-color:#d9c8f5}
+html.theme-user .leave-workspace .panel-head{background:#f7f3fd}
+html.theme-user .staff-picker-result:hover,html.theme-user .staff-picker-result:focus-visible{background:#f3eefc}
+html.theme-user .device-top{color:#f3eff9}
+html.theme-user .brand em,html.theme-user .nav button.active svg,html.theme-user .nav-group>button.section-active svg,html.theme-user .sidebar .text-btn{color:#c9a8ff}
+html.theme-user .nav button.active,html.theme-user .nav button.active:hover{background:#3a2763;box-shadow:inset 3px 0 0 #b48cff}
+html.theme-user .nav .nav-submenu button.active,html.theme-user .nav .nav-submenu button.active:hover{box-shadow:inset 2px 0 0 #b48cff}
+html.theme-user .sidebar :focus-visible,html.theme-user .sidebar button:focus-visible{outline-color:#c9a8ff}
+html.theme-user .toast{border-left-color:#b48cff}
+html.theme-user .modal-back{background:#1e14338c}
+html.theme-user .device small,html.theme-user .profile small{color:#b3a6c9}

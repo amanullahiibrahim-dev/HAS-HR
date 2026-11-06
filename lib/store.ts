@@ -1,7 +1,8 @@
+import { joiningDateLock } from "./joining-date-lock";
 import fs from "node:fs";
 import { initializePunchOwnership } from "./punch-ownership";
 import path from "node:path";
-import { policyForClient, resolvedEntitlements } from "./leave-policy";
+import { policyForClient, resolvedEntitlements, openingBalanceTypes, periodBalance } from "./leave-policy";
 import type { LeaveType } from "./leave-policy";
 import { requiredArrival, offDays, lateCutoff } from "./attendance-schedule";
 import { attendanceForClient } from "./attendance";
@@ -11,9 +12,17 @@ import type { McDocument } from "./mc-documents";
 import type { AttendanceCorrection } from "./attendance";
 import type { DutyTravelDetails } from "./duty-travel";
 
-export const staffTypes = ["Teacher", "Admin Staff", "Administrator", "Technical Staff", "Support Staff", "Principal", "Deputy Principal"] as const;
+export const staffTypes = ["Teacher", "Leading Teacher", "Admin Staff", "Administrator", "Technical Staff", "Support Staff", "Principal", "Deputy Principal"] as const;
 
 export type Staff = {
+  joinedOn?: string;
+  leaveYearAnchor?: string;
+  leavePeriodRules?: Record<string, import("./leave-periods").LeavePeriodBasis>;
+  leavePeriodBalances?: Record<string, Record<string, import("./leave-policy").OpeningBalance>>;
+  leaveBalanceRevision?: number;
+  leavePeriodChanges?: {at:string;actor:"Administrator";reason:string;before:unknown;after:unknown}[];
+  leaveOpeningBalances?: Record<string, import("./leave-policy").OpeningBalance>;
+  leaveBalanceChanges?: {year:number;at:string;actor:"Administrator";reason:string;before:import("./leave-policy").OpeningBalance|null;after:import("./leave-policy").OpeningBalance}[];
   id: string;
   name: string;
   dept: string;
@@ -56,6 +65,7 @@ export type Leave = {
 };
 
 export type Punch = {
+  denied?: { at: string; actor: "Administrator"; reason: string };
   employeeId?: string | null;
   kind?: import("./punch-classification").PunchKind;
   eventType?: string;
@@ -69,6 +79,10 @@ export type Punch = {
 };
 
 export type Store = {
+  disciplinaryActions?: import("./disciplinary").DisciplinaryAction[];
+  disciplinaryChanges?: {id:string;at:string;actor:"Administrator";reason:string;before:import("./disciplinary").DisciplinaryAction|null;after:import("./disciplinary").DisciplinaryAction}[];
+  supervisorAssignments?: import("./supervision").SupervisorAssignment[];
+  supervisorChanges?: {id:string;at:string;actor:"Administrator";reason:string;before:import("./supervision").SupervisorAssignment|null;after:import("./supervision").SupervisorAssignment}[];
   leaveDeletions?: {id:string;leaveId:string;employeeId:string;at:string;actor:"Administrator";reason:string}[];
   pinAssignments?: {employeeId:string;pin:string;from:string;to?:string}[];
   punchImportCutoffs?: Record<string, string>;
@@ -95,7 +109,7 @@ function freshStore(): Store {
 export function readStore(): Store {
   try {
     const parsed = JSON.parse(fs.readFileSync(dbPath, "utf8")) as Partial<Store>;
-    const store: Store = { leaveDeletions:parsed.leaveDeletions || [], closedDays: parsed.closedDays || [], closedDayChanges: parsed.closedDayChanges || [], pinAssignments: parsed.pinAssignments || [], punchImportCutoffs: parsed.punchImportCutoffs || {}, pendingEmployeeFileDeletes: parsed.pendingEmployeeFileDeletes || [], people: parsed.people || [], leaves: parsed.leaves || [], punches: parsed.punches || [], holidays: parsed.holidays || [], mcDocuments: parsed.mcDocuments || [], sync: parsed.sync, leaveChanges: parsed.leaveChanges || [], corrections: parsed.corrections || [], device: { ...freshStore().device, ...parsed.device } };
+    const store: Store = { disciplinaryActions:parsed.disciplinaryActions||[], disciplinaryChanges:parsed.disciplinaryChanges||[], supervisorAssignments:parsed.supervisorAssignments||[], supervisorChanges:parsed.supervisorChanges||[], leaveDeletions:parsed.leaveDeletions || [], closedDays: parsed.closedDays || [], closedDayChanges: parsed.closedDayChanges || [], pinAssignments: parsed.pinAssignments || [], punchImportCutoffs: parsed.punchImportCutoffs || {}, pendingEmployeeFileDeletes: parsed.pendingEmployeeFileDeletes || [], people: parsed.people || [], leaves: parsed.leaves || [], punches: parsed.punches || [], holidays: parsed.holidays || [], mcDocuments: parsed.mcDocuments || [], sync: parsed.sync, leaveChanges: parsed.leaveChanges || [], corrections: parsed.corrections || [], device: { ...freshStore().device, ...parsed.device } };
     initializePunchOwnership(store);
     return store;
   } catch (error) {
@@ -131,10 +145,14 @@ export function stateForClient(store = readStore()) {
   const lastSeen = store.device.lastSeen;
   const online = !!lastSeen && Date.now() - new Date(lastSeen).getTime() < 5 * 60 * 1000;
   return {
-    people: store.people.filter(person => !person.removedAt).map((person) => ({ ...person, workStart: requiredArrival(person.role), entitlements: resolvedEntitlements(person) })),
+    people: store.people.filter(person => !person.removedAt).map((person) => ({ ...person, joiningDateLock:joiningDateLock(store,person.id), workStart: requiredArrival(person.role), entitlements: resolvedEntitlements(person), balancePeriods:Object.fromEntries(openingBalanceTypes.map(type=>[type,periodBalance(person,store.leaves,type,new Date(Date.now()+5*3600000).toISOString().slice(0,10),store.holidays||[])])) })),
+    disciplinaryActions:(store.disciplinaryActions||[]).filter(record=>visibleIds.has(record.employeeId)),
+    disciplinaryChanges:(store.disciplinaryChanges||[]).filter(change=>visibleIds.has(change.after.employeeId)),
+    supervisorAssignments:(store.supervisorAssignments||[]).filter(record=>visibleIds.has(record.employeeId)),
+    supervisorChanges:(store.supervisorChanges||[]).filter(change=>visibleIds.has(change.after.employeeId)),
     staffTypes,
     attendanceSchedule: { byRole: Object.fromEntries(staffTypes.map(role => [role, {start:requiredArrival(role), lateFrom:lateCutoff(role)}])), teacher: requiredArrival("Teacher"), admin: requiredArrival("Admin Staff"), offDays, lateCutoffs:{teacher:lateCutoff("Teacher"),admin:lateCutoff("Admin Staff")}, arrivalRule: "late at or after cutoff" },
-    leaves: store.leaves.map(leave=>({...leave,returnReview:leave.type!=="Duty travel"&&leave.returnedAt?(leave.returnedAt.slice(0,10)<=leave.start?"Same-day return: administrator review required":leave.returnedAt.slice(0,10)>leave.end?"Returned after approved leave ended: review excess absence":undefined):(leave.type!=="Duty travel"&&leave.status==="Approved"&&store.punches.some(p=>p.employeeId===leave.employeeId&&p.kind==="attendance-in"&&p.timestamp.slice(0,10)===leave.start)?"Punch on leave start date: review leave dates; not automatically cancelled":undefined),mcDocument:leave.mcDocumentId?store.mcDocuments?.find(d=>d.id===leave.mcDocumentId):undefined,medicalReview:medicalReview(leave,store.people.find(p=>p.id===leave.employeeId)||{role:"Admin Staff"} as Staff,undefined,store.holidays || []),policyReview:(leave.type==="Hajj"||leave.type==="Umra")&&!leave.trip?"Legacy pilgrimage: confirm annual / first paid Hajj / no-pay basis":leave.type==="Circumcision"&&!leave.eventReference?"Confirm circumcision occasion reference":undefined})),
+    leaves: store.leaves.map(leave=>({...leave,returnReview:leave.type!=="Duty travel"&&leave.returnedAt?(leave.returnedAt.slice(0,10)<=leave.start?"Same-day return: administrator review required":leave.returnedAt.slice(0,10)>leave.end?"Returned after approved leave ended: review excess absence":undefined):(leave.type!=="Duty travel"&&leave.status==="Approved"&&store.punches.some(p=>!p.denied&&p.employeeId===leave.employeeId&&p.kind==="attendance-in"&&p.timestamp.slice(0,10)===leave.start)?"Punch on leave start date: review leave dates; not automatically cancelled":undefined),mcDocument:leave.mcDocumentId?store.mcDocuments?.find(d=>d.id===leave.mcDocumentId):undefined,medicalReview:medicalReview(leave,store.people.find(p=>p.id===leave.employeeId)||{role:"Admin Staff"} as Staff,undefined,store.holidays || []),policyReview:(leave.type==="Hajj"||leave.type==="Umra")&&!leave.trip?"Legacy pilgrimage: confirm annual / first paid Hajj / no-pay basis":leave.type==="Circumcision"&&!leave.eventReference?"Confirm circumcision occasion reference":undefined})),
     leaveChanges: store.leaveChanges || [],
     attendance,
     attendanceCorrections: store.corrections || [],

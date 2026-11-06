@@ -1,6 +1,6 @@
-import type { Store } from "./store";
-import { validLeaveDate } from "./leave-policy";
-import { actualUsedDays, chargeablePeriodDays } from "./leave-requirements";
+import type { Leave, Store } from "./store";
+import { planLeave, validLeaveDate } from "./leave-policy";
+import { actualUsedDays, chargeablePeriodDays, addDate } from "./leave-requirements";
 export const closureCategories=["Public holiday","Presidential closure","Other official closure"];
 export function saveClosedDays(store:Store,input:unknown,makeId:()=>string,at:string) {
   if(!Array.isArray(input)||input.length>1000)throw new Error("Select up to 1,000 closed dates.");
@@ -12,33 +12,49 @@ export function saveClosedDays(store:Store,input:unknown,makeId:()=>string,at:st
   });
   if(new Set(entries.map(day=>day.date)).size!==entries.length)throw new Error("A date can be recorded only once.");
   entries.sort((a,b)=>a.date.localeCompare(b.date));
-  const before=(store.holidays||[]).map(date=>store.closedDays?.find(day=>day.date===date)||{date,reason:"Previously configured closed date",category:"Other official closure"});
-  const dates=entries.map(day=>day.date), dateChanged=JSON.stringify([...(store.holidays||[])].sort())!==JSON.stringify(dates);
-  const oldDates=store.holidays||[];
-  const changedDates=new Set([...oldDates.filter(date=>!dates.includes(date)),...dates.filter(date=>!oldDates.includes(date))]);
-  let recalculated=0;
-  if(dateChanged)for(const leave of store.leaves){
-    if(!["Pending","Approved","Completed"].includes(leave.status)||["Duty travel","No pay"].includes(leave.type)||!validLeaveDate(leave.start)||!validLeaveDate(leave.end))continue;
-    if(![...changedDates].some(date=>date>=leave.start&&date<leave.end))continue;
-    const previous=JSON.parse(JSON.stringify(leave));
-    const deduction=chargeablePeriodDays(leave,leave.end,dates);
-    const priorDeduction=leave.deductibleDays??leave.days;
-    // Recalculate completed actual usage, including early returns, without moving authorized dates.
-    const candidate={...leave,deductibleDays:deduction};
-    let used=leave.usedDays;
-    if(leave.status==="Completed"&&leave.returnedAt){
-      const oldUsage=actualUsedDays(leave,leave.returnedAt.slice(0,10),oldDates);
-      const newUsage=actualUsedDays(candidate,leave.returnedAt.slice(0,10),dates);
-      // Apply only the calendar difference, preserving prior administrator adjustments.
-      used=Math.max(0,Math.min(deduction,(leave.usedDays??oldUsage)+newUsage-oldUsage));
-    }
-    if(deduction===priorDeduction&&used===leave.usedDays)continue;
-    leave.deductibleDays=deduction;if(used!==undefined)leave.usedDays=used;
-    leave.revision=(leave.revision||0)+1;
-    (store.leaveChanges||=[]).push({id:makeId(),leaveId:leave.id,actor:"Administrator",at,reason:"Closed dates changed: automatically recalculated eligible deductions; approved dates retained.",before:previous,after:{...leave}});
-    recalculated++;
-  }
+  const before=(store.holidays||[]).map(date=>{const day=store.closedDays?.find(day=>day.date===date);return {date,reason:day?.reason||"Previously configured closed date",category:day?.category||"Other official closure"};}).sort((a,b)=>a.date.localeCompare(b.date));
+  const dates=entries.map(day=>day.date);
+  const recalculated=recalculateLeaveCalendar(store,dates,makeId,at);
   store.holidays=dates;store.closedDays=entries;
   if(JSON.stringify(before)!==JSON.stringify(entries))(store.closedDayChanges||=[]).push({id:makeId(),at,actor:"Administrator",before,after:entries.map(day=>({...day}))});
   return recalculated;
+}
+
+/** Retain the requested leave allowance; excluded dates extend its planned period. */
+export function recalculateLeaveCalendar(store:Store,dates:string[],makeId:()=>string,at:string) {
+  const oldDates=store.holidays||[];
+  const updates:{leave:Leave;before:Leave;after:Leave}[]=[];
+  for(const leave of store.leaves){
+    if(!["Pending","Approved","Completed"].includes(leave.status)||["Duty travel","No pay"].includes(leave.type)||!validLeaveDate(leave.start)||!validLeaveDate(leave.end))continue;
+    const before=JSON.parse(JSON.stringify(leave)) as Leave;
+    const after={...leave,trip:leave.trip?{...leave.trip}:undefined};
+    if(leave.type==="Hajj"||leave.type==="Umra"){
+      if(leave.trip?.basis==="Annual")after.end=planLeave("Annual",leave.start,leave.days,dates).end;
+      else if(leave.trip?.charter===false&&leave.trip.baseStart&&leave.trip.baseEnd){
+        // Article 186(b,c,f): only the 30-day base extends. Atoll travel remains calendar days.
+        const trailing=Math.round((Date.parse(leave.end)-Date.parse(leave.trip.baseEnd))/86400000);
+        const base=planLeave("Hajj",leave.trip.baseStart,30,dates);
+        after.trip!.baseEnd=base.end;
+        after.end=addDate(base.end,trailing);
+      }
+      // Chartered flight dates and unconfirmed legacy travel periods stay fixed.
+    }else after.end=planLeave(leave.type,leave.start,leave.days,dates).end;
+    const deduction=chargeablePeriodDays(after,after.end,dates);
+    if(leave.deductibleDays!==undefined||after.end!==leave.end||deduction!==leave.days)after.deductibleDays=deduction;
+    if(leave.status==="Completed"&&leave.returnedAt){
+      const oldUsage=actualUsedDays(leave,leave.returnedAt.slice(0,10),oldDates);
+      const newUsage=actualUsedDays(after,leave.returnedAt.slice(0,10),dates);
+      // Preserve actual return and any manual adjustment; apply only the calendar difference.
+      after.usedDays=Math.max(0,Math.min(deduction,(leave.usedDays??oldUsage)+newUsage-oldUsage));
+    }
+    if(after.end===leave.end&&after.deductibleDays===leave.deductibleDays&&after.usedDays===leave.usedDays&&JSON.stringify(after.trip)===JSON.stringify(leave.trip))continue;
+    after.revision=(leave.revision||0)+1;
+    updates.push({leave,before,after});
+  }
+  // Stage all calculations before mutating the store, so an invalid plan cannot partly save.
+  for(const {leave,before,after} of updates){
+    Object.assign(leave,after);
+    (store.leaveChanges||=[]).push({id:makeId(),leaveId:leave.id,actor:"Administrator",at,reason:"Holiday calendar recalculated under CSC Articles 175(b), 178(c), 181(d), 184-188 and 190(f): excluded dates extend applicable planned leave; actual return retained.",before,after:JSON.parse(JSON.stringify(after))});
+  }
+  return updates.length;
 }

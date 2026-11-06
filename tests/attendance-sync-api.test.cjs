@@ -38,3 +38,14 @@ test('wrong credentials and mismatched terminal serials cannot write', async () 
 test('software event labels survive import and enrich a matching raw event without duplication',async()=>{
  const h=harness();await h.send({logs:[log],deviceSerial:log.serial});const response=await h.send({logs:[{...log,eventType:'ATT IN'}],deviceSerial:log.serial});assert.equal(response.status,200);assert.equal((await response.json()).inserted,0);assert.equal(h.store.punches.length,1);assert.equal(h.store.punches[0].kind,'attendance-in');assert.equal(h.store.punches[0].eventType,'ATT IN');assert.equal(h.store.punches[0].state,log.state);
 });
+
+
+test('omitting the optional batch serial cannot bypass terminal identity checks',async()=>{
+ for(const payload of [{logs:[{...log,serial:'OTHER'}]},{logs:[log,{...log,serial:'OTHER',pin:'00043'}]},{logs:[],deviceSerial:'OTHER'}]){
+  const h=harness(),before=JSON.stringify(h.store);assert.equal((await h.send(payload)).status,400);assert.equal(h.writes(),0);assert.equal(JSON.stringify(h.store),before);
+ }
+ const h=harness();assert.equal((await h.send({logs:[{...log,eventType:'ATT IN'}]})).status,200);assert.equal(h.store.punches[0].kind,'attendance-in');
+});
+test('an unconfigured terminal cannot import even with valid bridge credentials',async()=>{
+ for(const serial of [undefined,'','   ']){const h=harness();h.env.ZKTECO_DEVICE_SN=serial;assert.equal((await h.send({logs:[log]})).status,503);assert.equal(h.writes(),0);assert.equal(h.store.punches.length,0);}
+});

@@ -1,3 +1,6 @@
+import { leavePeriod, defaultLeavePeriodRules, cscServiceTypes } from "./leave-periods";
+import type { PeriodPerson } from "./leave-periods";
+import { allocatedLeaveDays } from "./leave-period-allocation";
 export const leaveTypes = ["Family", "Annual", "Hajj", "Umra", "Paternity", "Maternity", "Circumcision", "No pay", "Duty travel"] as const;
 export const sickLeaveTypes = ["Sick with MC", "Sick without MC"] as const;
 export const legacyLeaveTypes = ["Medical", "Casual"] as const;
@@ -13,7 +16,7 @@ export const sickWithoutMcLimit = 15;
 export const sickWithoutMcConsecutiveLimit = 2;
 
 export const leaveNotes: Record<StaffLeaveType | SickLeaveType, string> = {
-  "Duty travel": "Office-authorized official duty under CSC Article 172(c). Record the approved period, times, purpose and duty order. No annual or sick leave is deducted; calendar days describe the assignment, including weekends and holidays.",
+  "Duty travel": "Office-authorized official duty under CSC Article 172(c). Record the start date and duration. Approved duty dates count as present. No annual or sick leave is deducted; calendar days describe the assignment, including weekends and holidays.",
   "No pay": "Administrator-authorized unpaid leave. Enter the approved number of calendar days, including weekends and holidays. No annual, sick or other paid leave balance is deducted.",
   Family: "10 days. Excludes weekends, Dhivehi-calendar holidays and presidentially declared holidays.",
   Annual: "30 days. Excludes weekends, Dhivehi-calendar holidays and presidentially declared holidays.",
@@ -43,7 +46,20 @@ export const excludeWeekends: Record<LeaveType, boolean> = {
   Casual: true
 };
 
-type PersonLike = { annual?: number; medical?: number; casual?: number; gender?: string };
+export type OpeningBalance = { used: Record<string, number>; revision: number; updatedAt: string; reason: string };
+export const openingBalanceTypes = ["Family", "Annual", "Sick with MC", "Sick without MC", "Medical", "Casual"] as const;
+export type BalancePerson = PeriodPerson & { leavePeriodBalances?: Record<string, Record<string, OpeningBalance>>; leaveOpeningBalances?: Record<string, OpeningBalance>; annual?: number; medical?: number; casual?: number; gender?: string };
+type PersonLike = BalancePerson;
+export function openingUsed(person:BalancePerson|undefined,type:string,scope?:number|string){
+  if(typeof scope==="string"){
+    const period=leavePeriod(person||{},type,scope);if(!period.start)throw new Error(period.label+". Set up the employee's leave periods in Manage Leave.");
+    const entry=person?.leavePeriodBalances?.[type]?.[period.key];
+    if(!entry&&Object.entries(person?.leaveOpeningBalances||{}).some(([year,entry])=>`${year}-01-01`<period.end&&`${Number(year)+1}-01-01`>period.start&&(Number(entry.used[type])||0)>0))throw new Error("Review earlier year-only opening usage for this leave period in Manage Leave.");
+    return Number(entry?.used[type])||0;
+  }
+  return Object.entries(person?.leaveOpeningBalances||{}).filter(([key])=>scope===undefined||key===String(scope)).reduce((sum,[,entry])=>sum+(Number(entry.used[type])||0),0);
+}
+
 type LeaveLike = { id?: string; employeeId: string; type: string; days: number; usedDays?: number; deductibleDays?: number; status: string; start?: string; end?: string; returnedAt?: string; chargeType?: string; payBasis?: string; medical?: {unauthorizedAbsence?: boolean} };
 
 export function entitlementFor(type: LeaveType, person: PersonLike, start = new Date().toISOString().slice(0,10)): number {
@@ -69,24 +85,28 @@ export function countedDays(leave: LeaveLike): number {
   return Number(leave.usedDays ?? planned);
 }
 
-export function usedDaysForType(leaves: LeaveLike[], employeeId: string, type: LeaveType, excludeId?: string, year?: number): number {
-  return leaves
-    .filter((leave) => !leave.medical?.unauthorizedAbsence && leave.id !== excludeId && leave.employeeId === employeeId && (leave.type === type || (type === "Annual" && leave.chargeType === "Annual")) && leave.payBasis !== "No pay" && (type === "Annual" || leave.chargeType !== "Annual") && (year === undefined || Number(leave.start?.slice(0,4)) === year) && ["Pending", "Approved", "Completed"].includes(leave.status))
-    .reduce((sum, leave) => sum + countedDays(leave), 0);
+export function usedDaysForType(leaves: LeaveLike[], employeeId: string, type: LeaveType, excludeId?: string, scope?: number|string, person?: PersonLike, holidays:string[]=[]): number {
+  const period=typeof scope==="string"?leavePeriod(person||{},type,scope):undefined;
+  return openingUsed(person,type,scope) + leaves
+    .filter(leave=>!leave.medical?.unauthorizedAbsence&&leave.id!==excludeId&&leave.employeeId===employeeId&&(leave.type===type||(type==="Annual"&&leave.chargeType==="Annual"))&&leave.payBasis!=="No pay"&&(type==="Annual"||leave.chargeType!=="Annual")&&(typeof scope!=="number"||Number(leave.start?.slice(0,4))===scope)&&["Pending","Approved","Completed"].includes(leave.status))
+    .reduce((sum,leave)=>sum+(period?allocatedLeaveDays(leave,period,holidays,excludeWeekends[type]):countedDays(leave)),0);
 }
-
-export function sickUsage(leaves: LeaveLike[], employeeId: string, excludeId?: string, year?: number) {
-  const considered = leaves.filter(
-    (leave) =>
-      !leave.medical?.unauthorizedAbsence && leave.id !== excludeId &&
-      leave.employeeId === employeeId &&
-      (year === undefined || Number(leave.start?.slice(0,4)) === year) &&
-      (leave.type === "Sick with MC" || leave.type === "Sick without MC") &&
-      ["Pending", "Approved", "Completed"].includes(leave.status)
-  );
-  const withoutMc = considered.filter((leave) => leave.type === "Sick without MC").reduce((sum, leave) => sum + countedDays(leave), 0);
-  const withMc = considered.filter((leave) => leave.type === "Sick with MC").reduce((sum, leave) => sum + countedDays(leave), 0);
-  return { withMc, withoutMc, total: withMc + withoutMc };
+export function sickUsage(leaves:LeaveLike[],employeeId:string,excludeId?:string,scope?:number|string,person?:PersonLike,holidays:string[]=[]){
+  const withMc=usedDaysForType(leaves,employeeId,"Sick with MC",excludeId,scope,person,holidays),withoutMc=usedDaysForType(leaves,employeeId,"Sick without MC",excludeId,scope,person,holidays);
+  return {withMc,withoutMc,total:withMc+withoutMc};
+}
+export function periodBalance(person:BalancePerson&{id:string},leaves:LeaveLike[],type:LeaveType,asOf:string,holidays:string[]=[]){
+  const period=leavePeriod(person,type,asOf),entitlement=entitlementFor(type,person,asOf);
+  if(!period.start)return {period,entitlement,used:0,available:null};
+  let used:number;
+  try{used=usedDaysForType(leaves,person.id,type,undefined,asOf,person,holidays);}
+  catch(error){return {period:{...period,label:error instanceof Error?error.message:"Review opening usage"},entitlement,used:0,available:null};}
+  const rawUsed=used;
+  if(type.startsWith("Sick")){
+    let sick;try{sick=sickUsage(leaves,person.id,undefined,asOf,person,holidays);}catch(error){return {period:{...period,label:error instanceof Error?error.message:"Review opening usage"},entitlement,used:0,available:null};}
+    used=entitlement-Math.max(0,Math.min(30-sick.total,type==="Sick without MC"?15-sick.withoutMc:30));
+  }
+  return {period,entitlement,used,rawUsed,available:Math.max(0,entitlement-used)};
 }
 
 export function countLeaveDays(start: string, end: string, weekendsExcluded: boolean, holidays: string[] = []): number {
@@ -153,6 +173,9 @@ export function validateSickWithoutMcRun(leaves: LeaveLike[], candidate: LeaveLi
 }
 
 export const policyForClient = {
+  openingBalanceTypes,
+  defaultLeavePeriodRules,
+  cscServiceTypes,
   types: leaveTypes,
   sickTypes: sickLeaveTypes,
   legacyTypes: legacyLeaveTypes,

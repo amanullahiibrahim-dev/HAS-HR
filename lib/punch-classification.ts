@@ -10,7 +10,7 @@ export function normalizedPunchKind(kind: unknown, eventType: unknown): PunchKin
   return (kind as PunchKind | undefined) || labelled;
 }
 export function dayPunches(punches: Punch[]) {
-  const sorted = punches.slice().sort((a,b)=>a.timestamp.localeCompare(b.timestamp));
+  const sorted = punches.filter(p=>!p.denied).sort((a,b)=>a.timestamp.localeCompare(b.timestamp));
   const ins = sorted.filter(p=>p.kind === "attendance-in"), outs = sorted.filter(p=>p.kind === "attendance-out");
   if (ins.length || outs.length) {
     const firstIn = ins[0];
@@ -18,5 +18,5 @@ export function dayPunches(punches: Punch[]) {
     return { checkIn: firstIn?.timestamp, checkOut: lastOut?.timestamp, note: !firstIn ? "Checkout received; attendance check-in is missing." : !lastOut ? "Attendance check-in received; checkout is missing." : "", inferred: false };
   }
   const untyped = sorted.filter(p=>!p.kind);
-  return { checkIn:undefined, checkOut:undefined, note:untyped.length ? "Unlabelled machine punches cannot establish arrival or departure. Review the original logs or record an audited correction." : "Only overtime/break punches received; attendance IN/OUT is missing.", inferred:false };
+  return { checkIn:undefined, checkOut:undefined, note:!sorted.length && punches.some(p=>p.denied) ? "All fingerprint logs for this day were denied by an administrator." : untyped.length ? "Unlabelled machine punches cannot establish arrival or departure. Review the original logs or record an audited correction." : "Only overtime/break punches received; attendance IN/OUT is missing.", inferred:false };
 }

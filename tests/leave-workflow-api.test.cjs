@@ -1,9 +1,9 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
 function harness(){
-  let writes=0,authenticated=true,sameOrigin=true;const cache={},store={people:[{id:'A',name:'Teacher',role:'Teacher',devicePin:'01',annual:30,medical:0,casual:0,workStart:'07:00'}],leaves:[],punches:[],holidays:[],device:{lastSeen:null,serial:null,count:0}};
-  const mock={"next/server":{NextResponse:{json:(data,options)=>new Response(JSON.stringify(data),{status:options?.status||200,headers:{'content-type':'application/json'}})}},"@/lib/auth":{isAdmin:()=>authenticated,isSameOrigin:()=>sameOrigin}};
-  function load(name){if(cache[name])return cache[name];const exports={};cache[name]=exports;vm.runInNewContext(ts.transpileModule(fs.readFileSync(name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,{exports,require:n=>mock[n]||(n.startsWith('@/')?load(n.slice(2)):n.startsWith('./')?load('lib/'+n.slice(2)):require(n)),Date,Map,Set,process,Buffer,Response,URL});return exports;}
+  let writes=0,authenticated=true,sameOrigin=true;const cache={},store={people:[{joinedOn:'2010-01-01',id:'A',name:'Teacher',role:'Teacher',devicePin:'01',annual:30,medical:0,casual:0,workStart:'07:00'}],leaves:[],punches:[],holidays:[],device:{lastSeen:null,serial:null,count:0}};
+  const mock={"next/server":{NextResponse:{json:(data,options)=>new Response(JSON.stringify(data),{status:options?.status||200,headers:{'content-type':'application/json'}})}},"@/lib/auth":{isAdmin:()=>authenticated,isSignedIn:()=>authenticated,currentSession:()=>authenticated?{kind:'admin'}:null,isSameOrigin:()=>sameOrigin}};
+  function load(name){if(cache[name])return cache[name];const exports={};cache[name]=exports;vm.runInNewContext(ts.transpileModule(fs.readFileSync(name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,{exports,require:n=>mock[n]||(n.startsWith('@/')?load(n.slice(2)):n.startsWith('./')?load('lib/'+n.slice(2)):require(n)),Date,Map,Set,process,Buffer,Response,URL,Error});return exports;}
   const actual=load('lib/store');cache['lib/store']={...actual,readStore:()=>store,writeStore:()=>{writes++},makeId:()=>String(store.leaves.length+1)};
   const route=load('app/api/state/route'),preview=load('app/api/leave-preview/route');
   return {store,load,send:payload=>route.POST(new Request('http://127.0.0.1/api/state',{method:'POST',body:JSON.stringify(payload)})),preview:q=>preview.GET(new Request('http://127.0.0.1/api/leave-preview?'+new URLSearchParams(q))),writes:()=>writes,deny:()=>{authenticated=false;},crossOrigin:()=>{sameOrigin=false;}};
@@ -55,49 +55,81 @@ test('confirmed early return completes no-pay leave using actual calendar days a
 });
 
 
-test('closed days automatically reduce approved/pending and completed early-return deductions without moving dates',async()=>{
- const h=harness();h.store.leaves=[
- {id:'A',employeeId:'A',name:'Teacher',type:'Annual',start:'2026-10-04',end:'2026-10-11',days:5,status:'Approved'},
- {id:'S',employeeId:'A',name:'Teacher',type:'Sick with MC',start:'2026-10-04',end:'2026-10-11',days:5,status:'Pending'},
- {id:'E',employeeId:'A',name:'Teacher',type:'Annual',start:'2026-10-04',end:'2026-10-11',days:5,status:'Completed',returnedAt:'2026-10-06 07:00:00',usedDays:2},
- {id:'D',employeeId:'A',name:'Teacher',type:'Annual',start:'2026-10-04',end:'2026-10-11',days:5,status:'Declined'}];
- const days=[{date:'2026-10-05',category:'Presidential closure',reason:'Official announcement'},{date:'2026-10-09',category:'Public holiday',reason:'Already a Friday'}];
- let response=await h.send({action:'closed-days.save',days});assert.equal(response.status,200);let state=await response.json();assert.equal(h.store.leaves[0].deductibleDays,4);assert.equal(h.store.leaves[1].deductibleDays,4);assert.equal(h.store.leaves[2].usedDays,1);assert.equal(h.store.leaves[3].deductibleDays,undefined);assert.equal(h.store.leaves[0].end,'2026-10-11');assert.equal(h.store.leaves[0].days,5);assert.equal(h.store.leaveChanges.length,3);assert.equal(h.store.closedDayChanges.length,1);assert.equal(state.closedDays.length,2);assert.equal(h.load('lib/leave-policy').usedDaysForType(h.store.leaves,'A','Annual'),5);
- const revisions=h.store.leaves.map(l=>l.revision);await h.send({action:'closed-days.save',days});assert.equal(h.store.leaveChanges.length,3);assert.equal(h.store.closedDayChanges.length,1);assert.deepEqual(h.store.leaves.map(l=>l.revision),revisions);
- response=await h.send({action:'closed-days.save',days:[]});assert.equal(response.status,200);assert.equal(h.store.leaves[0].deductibleDays,5);assert.equal(h.store.leaves[2].usedDays,2);assert.equal(h.store.leaves[2].returnedAt,'2026-10-06 07:00:00');assert.equal(h.store.leaves[0].end,'2026-10-11');
+test('adding a holiday extends family leave without reducing the three approved days; retry is idempotent',async()=>{
+ const h=harness();const input={employeeId:'A',type:'Family',start:'2026-11-01',end:'2026-11-04',days:3,status:'Approved'};
+ assert.equal((await h.send({action:'leave.create',leave:input})).status,200);
+ const leave=h.store.leaves[0],days=[{date:'2026-11-03',category:'Public holiday',reason:'Victory Day'}];
+ assert.equal((await h.send({action:'closed-days.save',days})).status,200);
+ assert.equal(leave.end,'2026-11-05');assert.equal(leave.days,3);assert.equal(leave.deductibleDays,3);
+ assert.equal(h.load('lib/leave-policy').usedDaysForType(h.store.leaves,'A','Family'),3);
+ assert.equal(h.store.leaveChanges[0].before.end,'2026-11-04');assert.equal(h.store.leaveChanges[0].after.end,'2026-11-05');
+ const revision=leave.revision;await h.send({action:'closed-days.save',days});assert.equal(leave.revision,revision);assert.equal(h.store.closedDayChanges.length,1);
+ const preview=await h.preview({employeeId:'A',type:'Family',start:leave.start,days:'3',excludeId:leave.id});assert.equal((await preview.json()).end,leave.end);
+ const updated=await h.send({action:'leave.update',id:leave.id,expectedRevision:revision,editReason:'Corrected note',leave:{...input,reason:'Family responsibility'}});assert.equal(updated.status,200);assert.equal(leave.end,'2026-11-05');assert.equal(leave.days,3);
+ await h.send({action:'closed-days.save',days:[]});assert.equal(leave.end,'2026-11-04');assert.equal(leave.deductibleDays,3);
 });
-test('closed dates follow each paid leave policy, preserve no-pay/duty, and exclude no extra Hajj travel days',async()=>{
- const h=harness();h.store.leaves=['Family','Paternity','Circumcision','No pay','Duty travel'].map((type,i)=>({id:String(i),employeeId:'A',name:'Teacher',type,start:'2026-10-04',end:'2026-10-11',days:type==='Family'?5:7,status:'Approved'}));
- h.store.leaves.push({id:'H',employeeId:'A',name:'Teacher',type:'Hajj',start:'2026-10-01',end:'2026-10-12',days:11,status:'Approved',trip:{basis:'First paid Hajj',baseStart:'2026-10-04',baseEnd:'2026-10-09'}});
- const days=['2026-10-02','2026-10-05','2026-10-09'].map(date=>({date,category:'Presidential closure',reason:'Official closure'}));assert.equal((await h.send({action:'closed-days.save',days})).status,200);
- assert.equal(h.store.leaves[0].deductibleDays,4);assert.equal(h.store.leaves[1].deductibleDays,5);assert.equal(h.store.leaves[2].deductibleDays,5);assert.equal(h.store.leaves[3].deductibleDays,undefined);assert.equal(h.store.leaves[4].deductibleDays,undefined);assert.equal(h.store.leaves[5].deductibleDays,10);
+
+test('all applicable categories extend their requested allowance and keep preview consistent',async()=>{
+ for(const type of ['Family','Annual','Sick with MC','Sick without MC','Paternity','Circumcision','Maternity','Medical','Casual']){
+  const h=harness(),policy=h.load('lib/leave-policy'),start='2026-11-01',plan=policy.planLeave(type,start,2);
+  h.store.leaves=[{id:'L',employeeId:'A',name:'Staff',type,start,end:plan.end,days:plan.days,status:'Pending'}];
+  const response=await h.send({action:'closed-days.save',days:[{date:'2026-11-02',category:'Public holiday',reason:'Official announcement'}]});assert.equal(response.status,200,type);
+  const leave=h.store.leaves[0],expected=policy.planLeave(type,start,2,['2026-11-02']);assert.equal(leave.end,expected.end,type);assert.equal(leave.days,plan.days,type);assert.equal(leave.deductibleDays,plan.days,type);
+ }
 });
-test('fully closed and half-day applied periods never produce negative or double-counted deductions',async()=>{
+
+test('weekend holidays are not counted twice, and additional holidays in the extension are also excluded',async()=>{
+ const h=harness();h.store.leaves=[{id:'L',employeeId:'A',type:'Family',start:'2026-11-05',end:'2026-11-09',days:2,status:'Approved'}];
+ const days=['2026-11-05','2026-11-06','2026-11-08','2026-11-09'].map(date=>({date,category:'Presidential closure',reason:'Official closure'}));
+ assert.equal((await h.send({action:'closed-days.save',days})).status,200);assert.equal(h.store.leaves[0].end,'2026-11-12');assert.equal(h.store.leaves[0].deductibleDays,2);
+});
+
+test('holiday before creation and holiday after creation produce the same leave dates and deductions',async()=>{
+ const days=[{date:'2026-11-03',category:'Public holiday',reason:'Victory Day'}],input={employeeId:'A',type:'Annual',start:'2026-11-01',end:'2026-11-05',days:4,status:'Approved'};
+ const before=harness();await before.send({action:'closed-days.save',days});await before.send({action:'leave.create',leave:input});
+ const after=harness();await after.send({action:'leave.create',leave:input});await after.send({action:'closed-days.save',days});
+ assert.equal(after.store.leaves[0].end,before.store.leaves[0].end);assert.equal(after.store.leaves[0].deductibleDays,4);assert.equal(after.store.leaves[0].days,before.store.leaves[0].days);
+});
+
+test('an unchanged calendar repairs the old deduction-only records once',async()=>{
+ const h=harness();h.store.holidays=['2026-11-03'];h.store.closedDays=[{date:'2026-11-03',category:'Public holiday',reason:'Victory Day'}];
+ h.store.leaves=[{id:'OLD',employeeId:'A',type:'Family',start:'2026-11-01',end:'2026-11-04',days:3,deductibleDays:2,status:'Approved'}];
+ await h.send({action:'closed-days.save',days:h.store.closedDays});assert.equal(h.store.leaves[0].end,'2026-11-05');assert.equal(h.store.leaves[0].deductibleDays,3);assert.equal(h.store.leaveChanges.length,1);assert.equal(h.store.closedDayChanges,undefined);
+ await h.send({action:'closed-days.save',days:h.store.closedDays});assert.equal(h.store.leaveChanges.length,1);
+});
+
+test('completed records preserve actual return and manual adjustments while declined/no-pay/duty stay unchanged',async()=>{
+ const h=harness(),base={employeeId:'A',type:'Annual',start:'2026-10-04',end:'2026-10-09',days:5};
+ h.store.leaves=[{...base,id:'EARLY',status:'Completed',returnedAt:'2026-10-06 07:00:00',usedDays:2},{...base,id:'ADJUST',status:'Completed',returnedAt:'2026-10-08 07:00:00',usedDays:3},{...base,id:'DECLINED',status:'Declined'},{...base,id:'NO',type:'No pay',status:'Approved'},{...base,id:'DUTY',type:'Duty travel',status:'Approved'}];
+ const unchanged=JSON.stringify(h.store.leaves.slice(2));await h.send({action:'closed-days.save',days:[{date:'2026-10-05',category:'Public holiday',reason:'Official closure'}]});
+ assert.equal(h.store.leaves[0].end,'2026-10-12');assert.equal(h.store.leaves[0].usedDays,1);assert.equal(h.store.leaves[0].returnedAt,'2026-10-06 07:00:00');assert.equal(h.store.leaves[0].status,'Completed');assert.equal(h.store.leaves[1].usedDays,2);assert.equal(JSON.stringify(h.store.leaves.slice(2)),unchanged);
+ await h.send({action:'closed-days.save',days:[]});assert.equal(h.store.leaves[0].usedDays,2);assert.equal(h.store.leaves[0].end,'2026-10-09');assert.equal(h.store.leaves[1].usedDays,3);
+});
+
+test('half days retain their allowance even when the whole original period becomes closed',async()=>{
  const h=harness();h.store.leaves=[{id:'ONE',employeeId:'A',type:'Sick without MC',start:'2026-10-04',end:'2026-10-05',days:1,status:'Approved'},{id:'HALF',employeeId:'A',type:'Annual',start:'2026-10-04',end:'2026-10-06',days:1.5,status:'Approved'}];
- const days=['2026-10-04','2026-10-05'].map(date=>({date,category:'Other official closure',reason:'Special official closure'}));await h.send({action:'closed-days.save',days});assert.equal(h.store.leaves[0].deductibleDays,0);assert.equal(h.store.leaves[1].deductibleDays,0);assert.equal(h.load('lib/leave-policy').usedDaysForType(h.store.leaves,'A','Sick without MC'),0);
- await h.send({action:'closed-days.save',days:[days[1]]});assert.equal(h.store.leaves[1].deductibleDays,1);
+ const days=['2026-10-04','2026-10-05'].map(date=>({date,category:'Other official closure',reason:'Official closure'}));await h.send({action:'closed-days.save',days});assert.equal(h.store.leaves[0].end,'2026-10-07');assert.equal(h.store.leaves[0].deductibleDays,1);assert.equal(h.store.leaves[1].end,'2026-10-08');assert.equal(h.store.leaves[1].deductibleDays,1.5);
 });
-test('closed-day validation rejects bad dates, duplicate days and missing reasons without saving',async()=>{
+
+test('pilgrimage honors annual basis, non-charter base extension, fixed charter and atoll calendar-day exceptions',async()=>{
+ for(const basis of ['First paid Hajj','No pay','Annual'])for(const charter of [false,true]){
+  const h=harness(),type=basis==='First paid Hajj'?'Hajj':'Umra',trip={basis,office:'Atoll',charter,flightReturn:'2026-11-10',atollBefore:3,firstHajjConfirmed:true,permissionReference:'HR/1'},input={employeeId:'A',type,start:'2026-11-01',days:3,status:'Approved',trip};
+  const original=h.load('lib/leave-requirements').resolveLeavePlan(h.store,h.store.people[0],input);h.store.leaves=[{...input,...original,id:'L'}];
+  const date=basis==='Annual'?'2026-11-02':'2026-11-05';await h.send({action:'closed-days.save',days:[{date,category:'Public holiday',reason:'Official holiday'}]});
+  const expected=h.load('lib/leave-requirements').resolveLeavePlan(h.store,h.store.people[0],input,'L'),leave=h.store.leaves[0];assert.equal(leave.end,expected.end,basis+' '+charter);assert.equal(leave.days,original.days);
+  if(basis!=='Annual'){assert.equal(leave.trip.baseEnd,expected.trip.baseEnd);if(charter)assert.equal(leave.end,original.end);else assert.notEqual(leave.end,original.end);}
+ }
+});
+
+test('cross-year extensions preserve the original requested allowance and a holiday after leave has no effect',async()=>{
+ const h=harness();h.store.leaves=[{id:'L',employeeId:'A',type:'Annual',start:'2026-12-31',end:'2027-01-05',days:3,status:'Approved'}];
+ await h.send({action:'closed-days.save',days:[{date:'2027-01-04',category:'Public holiday',reason:'Official holiday'}]});assert.equal(h.store.leaves[0].end,'2027-01-06');assert.equal(h.store.leaves[0].days,3);
+ const revision=h.store.leaves[0].revision;await h.send({action:'closed-days.save',days:[{date:'2027-01-04',category:'Public holiday',reason:'Official holiday'},{date:'2027-02-01',category:'Public holiday',reason:'Later holiday'}]});assert.equal(h.store.leaves[0].revision,revision);
+});
+
+test('closed-day validation rejects bad dates, duplicates and missing reasons without saving',async()=>{
  for(const days of [[{date:'2026-02-30',category:'Public holiday',reason:'Invalid'}],[{date:'2026-11-01',category:'Public holiday',reason:''}],[{date:'2026-11-01',category:'Unknown',reason:'Invalid'}],Array(2).fill({date:'2026-11-01',category:'Public holiday',reason:'Duplicate'})]){const h=harness();assert.equal((await h.send({action:'closed-days.save',days})).status,400);assert.equal(h.writes(),0);assert.equal(h.store.holidays.length,0);}
 });
-test('maternity closure reconciliation keeps its approved period and updates only the chargeable deduction',async()=>{
- const h=harness(),plan=h.load('lib/leave-policy').planLeave('Maternity','2026-01-01',1,[]);h.store.leaves=[{id:'MAT',employeeId:'A',type:'Maternity',start:'2026-01-01',end:plan.end,days:plan.days,status:'Approved'}];
- await h.send({action:'closed-days.save',days:[{date:'2026-01-05',category:'Presidential closure',reason:'Official closure'}]});assert.equal(h.store.leaves[0].deductibleDays,plan.days-1);assert.equal(h.store.leaves[0].end,plan.end);
-});
-
-test('editing notes on a closure-adjusted leave preserves its approved dates and adjusted charge',async()=>{
- const h=harness();await h.send({action:'leave.create',leave:{employeeId:'A',type:'Annual',start:'2026-10-04',end:'2026-10-08',days:4,status:'Approved'}});const leave=h.store.leaves[0];
- await h.send({action:'closed-days.save',days:[{date:'2026-10-05',category:'Presidential closure',reason:'Official closure'}]});assert.equal(leave.deductibleDays,3);
- const preview=await h.preview({employeeId:'A',type:'Annual',start:leave.start,days:String(leave.days),excludeId:leave.id});const plan=await preview.json();assert.equal(plan.end,'2026-10-08');assert.equal(plan.deductibleDays,3);assert.equal(plan.preservedPeriod,true);
- const response=await h.send({action:'leave.update',id:leave.id,expectedRevision:leave.revision,editReason:'Corrected note only',leave:{employeeId:'A',type:'Annual',start:leave.start,end:leave.end,days:leave.days,status:'Approved',reason:'Updated note'}});assert.equal(response.status,200);assert.equal(leave.end,'2026-10-08');assert.equal(leave.deductibleDays,3);assert.equal(leave.reason,'Updated note');
-});
-
-test('unrelated closures do not overwrite administrator-adjusted usage and relevant changes apply only their date difference',async()=>{
- const h=harness();h.store.leaves=[{id:'MANUAL',employeeId:'A',type:'Annual',start:'2026-10-04',end:'2026-10-08',days:4,status:'Completed',returnedAt:'2026-10-08 07:00:00',usedDays:3}];
- await h.send({action:'closed-days.save',days:[{date:'2026-11-01',category:'Public holiday',reason:'Outside leave'}]});assert.equal(h.store.leaves[0].usedDays,3);assert.equal(h.store.leaves[0].revision,undefined);
- await h.send({action:'closed-days.save',days:[{date:'2026-10-05',category:'Presidential closure',reason:'Within leave'}]});assert.equal(h.store.leaves[0].usedDays,2);assert.equal(h.store.leaves[0].deductibleDays,3);
-});
-
 
 test('permanent leave deletion removes only the selected record and restores its paid balance',async()=>{
  for(const [type,status] of [['Annual','Pending'],['Annual','Approved'],['Sick with MC','Completed'],['No pay','Declined'],['Duty travel','Approved']]){
@@ -114,4 +146,63 @@ test('deletion rejects stale revisions, missing reasons, unknown records and una
  for(const payload of [{id:'L',expectedRevision:1,reason:'Stale'},{id:'L',expectedRevision:2,reason:''},{id:'missing',expectedRevision:0,reason:'Not found'}]){const response=await h.send({action:'leave.delete',...payload});assert.equal(response.status,payload.id==='missing'?404:payload.expectedRevision===1?409:400);assert.equal(h.writes(),0);assert.equal(h.store.leaves.length,1);}
  const denied=harness();denied.deny();assert.equal((await denied.send({action:'leave.delete',id:'L',expectedRevision:0,reason:'test'})).status,401);assert.equal(denied.writes(),0);const cross=harness();cross.crossOrigin();assert.equal((await cross.send({action:'leave.delete',id:'L',expectedRevision:0,reason:'test'})).status,403);assert.equal(cross.writes(),0);
  const success=await h.send({action:'leave.delete',id:'L',expectedRevision:2,reason:'Wrong dates'});assert.equal(success.status,200);assert.equal((await h.send({action:'leave.delete',id:'L',expectedRevision:2,reason:'Retry'})).status,404);
+});
+
+test('administrator API persists disciplinary actions and supervisor assignments in the returned state',async()=>{const h=harness();h.store.people.push({id:'P',name:'Principal Example',role:'Principal',devicePin:'P'});let response=await h.send({action:'disciplinary.save',record:{employeeId:'A',date:'2025-01-01',action:'Written warning',reference:'TEST/1'}});assert.equal(response.status,200);assert.equal((await response.json()).disciplinaryActions[0].action,'Written warning');response=await h.send({action:'supervisor.save',assignment:{supervisor:{kind:'staff',id:'P'},employeeIds:['A'],from:'2025-01-01'},reason:'Annual assignment'});assert.equal(response.status,200);assert.equal((await response.json()).supervisorAssignments[0].supervisor.id,'P');});
+test('discipline/supervisor writes require administrator authentication and same origin',async()=>{for(const action of ['disciplinary.save','supervisor.save']){const h=harness();h.deny();assert.equal((await h.send({action})).status,401);assert.equal(h.writes(),0);const c=harness();c.crossOrigin();assert.equal((await c.send({action})).status,403);assert.equal(c.writes(),0);}});
+
+
+test('legacy year-only opening values require review before showing new period availability',async()=>{
+ const h=harness();let response=await h.send({action:'employee.opening-balance',id:'A',year:2026,used:{Family:7,Annual:20,'Sick with MC':10,'Sick without MC':5},expectedRevision:0,reason:'Old opening register'});assert.equal(response.status,200);
+ response=await h.preview({employeeId:'A',type:'Family',start:'2026-11-01',days:'3'});assert.equal(response.status,400);assert.match((await response.json()).error,/Review earlier/);
+ response=await h.send({action:'employee.period-balances',id:'A',asOf:'2026-11-01',joinedOn:'2010-01-01',used:{Family:7,Annual:20,'Sick with MC':10,'Sick without MC':5},expectedRevision:0,reason:'Checked opening usage for service period'});assert.equal(response.status,200);
+ response=await h.preview({employeeId:'A',type:'Family',start:'2026-11-01',days:'3'});assert.equal((await response.json()).available,3);
+ response=await h.send({action:'leave.create',leave:{...base,type:'Family',days:4}});assert.equal(response.status,400);
+ response=await h.send({action:'leave.create',leave:{...base,type:'Family',days:3}});assert.equal(response.status,200);
+ assert.equal(h.store.people[0].leaveOpeningBalances['2026'].used.Family,7);assert.equal(h.store.people[0].leavePeriodChanges.length,1);assert.equal(h.store.punches.length,0);
+});
+
+test('invalid opening balances, shared sick overuse and unauthorized changes are rejected atomically',async()=>{
+ const payload={action:'employee.opening-balance',id:'A',year:2026,used:{Family:1},expectedRevision:0,reason:'Register'};
+ for(const changes of [{id:'missing'},{year:2026.5},{year:1999},{used:{Family:-1}},{used:{Family:0.25}},{used:{Family:'2'}},{used:{Family:11}},{used:{'Sick with MC':20,'Sick without MC':11}},{used:{'Sick without MC':16}},{used:{Circumcision:1}},{reason:''}]){const h=harness();assert.equal((await h.send({...payload,...changes})).status,400);assert.equal(h.writes(),0);assert.equal(h.store.people[0].leaveOpeningBalances,undefined);}
+ const h=harness();h.deny();assert.equal((await h.send(payload)).status,401);assert.equal(h.writes(),0);const cross=harness();cross.crossOrigin();assert.equal((await cross.send(payload)).status,403);assert.equal(cross.writes(),0);
+});
+
+
+test('sick return date still calculates without joining date, and responds to days, start and holidays',async()=>{
+ const h=harness();delete h.store.people[0].joinedOn;
+ for(const [start,days,holidays] of [['2026-11-04',10,[]],['2026-11-04',5,[]],['2026-11-05',5,['2026-11-08']]]){
+  h.store.holidays=holidays;
+  const response=await h.preview({employeeId:'A',type:'Sick with MC',start,days:String(days)}),result=await response.json();
+  assert.equal(response.status,400);assert.match(result.error,/Joining date/);
+  assert.equal(result.preview.end,h.load('lib/leave-policy').planLeave('Sick with MC',start,days,holidays).end);assert.equal(result.preview.days,days);assert.equal(result.preview.readOnlyDays,false);
+ }
+ const invalid=await h.preview({employeeId:'A',type:'Sick with MC',start:'2026-02-30',days:'10'});assert.equal(invalid.status,400);assert.equal((await invalid.json()).preview,undefined);
+ const denied=harness();denied.deny();assert.equal((await denied.preview({employeeId:'A',type:'Sick with MC',start:'2026-11-04',days:'10'})).status,401);
+ assert.equal(h.writes(),0);
+});
+
+test('sick leave saves and edits with no MC upload and retains a later attachment',async()=>{
+ const h=harness(),input={...base,type:'Sick with MC',start:'2026-11-04',days:10,end:'2026-11-18'};
+ let response=await h.send({action:'leave.create',leave:input});assert.equal(response.status,200,await response.clone().text());
+ const leave=h.store.leaves[0];assert.equal(leave.mcDocumentId,undefined);assert.equal(leave.medical.verified,false);
+ response=await h.send({action:'leave.update',id:leave.id,expectedRevision:0,editReason:'Updated note',leave:{...input,reason:'Changed'}});assert.equal(response.status,200);assert.equal(leave.mcDocumentId,undefined);
+ h.store.mcDocuments=[{id:'MC-LATER',employeeId:'A',name:'later.pdf',uploadedAt:'2026-11-03T10:00:00Z'}];
+ response=await h.send({action:'leave.update',id:leave.id,expectedRevision:leave.revision,editReason:'Certificate added later',leave:{...input,mcDocumentId:'MC-LATER'}});assert.equal(response.status,200);assert.equal(leave.mcDocumentId,'MC-LATER');
+ response=await h.send({action:'leave.update',id:leave.id,expectedRevision:leave.revision,editReason:'Updated note only',leave:{...input,reason:'Note only'}});assert.equal(response.status,200);assert.equal(leave.mcDocumentId,'MC-LATER');
+});
+
+test('supervisor endpoint accepts the simplified form and audits generated dates and reasons',async()=>{
+ const h=harness();
+ const response=await h.send({action:'supervisor.save',assignment:{supervisor:{kind:'minister'},employeeIds:['A']}});assert.equal(response.status,200,await response.clone().text());
+ const record=h.store.supervisorAssignments[0],expectedDate=new Date(Date.parse(record.updatedAt)+5*3600000).toISOString().slice(0,10);assert.equal(record.from,expectedDate);assert.equal(record.to,undefined);assert.equal(h.writes(),1);assert.ok(h.store.supervisorChanges[0].reason.trim());
+ const before=JSON.stringify(h.store),writes=h.writes();assert.equal((await h.send({action:'supervisor.save',assignment:{supervisor:{kind:'minister'},employeeIds:['A']}})).status,400);assert.equal(h.writes(),writes);assert.equal(JSON.stringify(h.store),before);
+});
+
+test('simplified supervisor endpoint edits preserve historical boundaries and reject stale revisions',async()=>{
+ const h=harness();h.store.people.push({joinedOn:'2010-01-01',id:'B',name:'Supervisor',role:'Admin Staff',devicePin:'02',workStart:'08:00'});
+ h.store.supervisorAssignments=[{id:'S1',employeeId:'A',supervisor:{kind:'staff',id:'B'},from:'2026-01-01',to:'2026-06-30',revision:0,updatedAt:'2026-06-30T10:00:00.000Z',actor:'Administrator'}];
+ const payload={action:'supervisor.save',assignment:{id:'S1',supervisor:{kind:'minister'},employeeIds:['A']},expectedRevision:0};
+ const response=await h.send(payload);assert.equal(response.status,200,await response.clone().text());const record=h.store.supervisorAssignments[0];assert.equal(record.from,'2026-01-01');assert.equal(record.to,'2026-06-30');assert.equal(record.revision,1);assert.equal(record.supervisor.kind,'minister');assert.equal(h.store.supervisorChanges[0].before.supervisor.id,'B');assert.ok(h.store.supervisorChanges[0].reason.trim());
+ const before=JSON.stringify(h.store),writes=h.writes();assert.equal((await h.send(payload)).status,400);assert.equal(h.writes(),writes);assert.equal(JSON.stringify(h.store),before);
 });

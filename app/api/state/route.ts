@@ -1,3 +1,8 @@
+import { denyPunch } from "@/lib/punch-denial";
+import { savePeriodBalances } from "@/lib/period-balances";
+import { saveOpeningBalance } from "@/lib/opening-balances";
+import { saveDisciplinaryAction } from "@/lib/disciplinary";
+import { saveSupervisorAssignments } from "@/lib/supervision";
 import { deleteLeavePermanently } from "@/lib/leave-deletion";
 import { saveClosedDays } from "@/lib/closed-days";
 import { initializePunchOwnership, assignDevicePin } from "@/lib/punch-ownership";
@@ -10,7 +15,7 @@ import { addAttendanceCorrection } from "@/lib/attendance";
 import { applyLeaveEdit } from "@/lib/leave-edits";
 import { NextResponse } from "next/server";
 import { requiredArrival } from "@/lib/attendance-schedule";
-import { isAdmin, isSameOrigin } from "@/lib/auth";
+import { currentSession, isAdmin, isSignedIn, isSameOrigin } from "@/lib/auth";
 import { allLeaveTypes } from "@/lib/leave-policy";
 import type { LeaveType } from "@/lib/leave-policy";
 import { validateSickWithoutMcRun, validLeaveDate } from "@/lib/leave-policy";
@@ -20,21 +25,29 @@ import type { Leave, Staff } from "@/lib/store";
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
-  if (!isAdmin(request)) return NextResponse.json({ error: "Administrator sign-in required." }, { status: 401 });
+  const session = currentSession(request);
+  if (!session) return NextResponse.json({ error: "Sign-in required." }, { status: 401 });
   const store=readStore();
   if(store.pendingEmployeeFileDeletes?.length){flushEmployeeFileDeletes(store);writeStore(store);}
-  return NextResponse.json(stateForClient(store), { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ ...stateForClient(store), viewer: { name: session.name, kind: session.kind } }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request) {
-  if (!isAdmin(request)) return NextResponse.json({ error: "Administrator sign-in required." }, { status: 401 });
+  if (!isSignedIn(request)) return NextResponse.json({ error: "Sign-in required." }, { status: 401 });
   if (!isSameOrigin(request)) return NextResponse.json({ error: "Invalid request origin." }, { status: 403 });
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!payload || typeof payload.action !== "string") return NextResponse.json({ error: "A valid action is required." }, { status: 400 });
+  if (["employee.period-balances", "employee.opening-balance", "employee.balance"].includes(payload.action) && !isAdmin(request)) return NextResponse.json({ error: "Only the Administrator can edit leave balances." }, { status: 403 });
   const store = readStore();
   initializePunchOwnership(store);
 
-  if (payload.action === "closed-days.save" || payload.action === "holidays.save") {
+  if(payload.action==="disciplinary.save"){
+    try{saveDisciplinaryAction(store,payload.record,payload.expectedRevision,payload.reason,makeId(),new Date().toISOString());}
+    catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Invalid disciplinary action."},{status:400});}
+  }else if(payload.action==="supervisor.save"){
+    try{saveSupervisorAssignments(store,payload.assignment,payload.expectedRevision,payload.reason,makeId,new Date().toISOString());}
+    catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Invalid supervisor assignment."},{status:400});}
+  }else if (payload.action === "closed-days.save" || payload.action === "holidays.save") {
     try {
       const entries=payload.action==="closed-days.save"?payload.days:Array.isArray(payload.dates)?payload.dates.map(date=>({date,reason:"Official closed date",category:"Other official closure"})):null;
       saveClosedDays(store,entries,makeId,new Date().toISOString());
@@ -78,6 +91,12 @@ export async function POST(request: Request) {
     if(typeof payload.id!=="string"||!payload.id.trim())return NextResponse.json({error:"Choose an employee."},{status:400});
     if(!store.people.some(person=>person.id===payload.id))return NextResponse.json({error:"Employee not found."},{status:404});
     permanentlyRemoveEmployee(store,payload.id);
+  } else if (payload.action === "employee.period-balances") {
+    try{savePeriodBalances(store,payload.id,payload,new Date().toISOString());}
+    catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Invalid leave periods."},{status:400});}
+  } else if (payload.action === "employee.opening-balance") {
+    try{saveOpeningBalance(store,payload.id,payload.year,payload.used,payload.expectedRevision,payload.reason,new Date().toISOString());}
+    catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Invalid opening balances."},{status:400});}
   } else if (payload.action === "employee.balance") {
     const input = payload.employee as Partial<Staff> | undefined;
     const person = store.people.find((p) => p.id === input?.id);
@@ -181,6 +200,9 @@ export async function POST(request: Request) {
     catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Leave allowance exceeded."},{status:400});}
     leave.usedDays = usedDays;
     leave.revision=(leave.revision || 0)+1;
+  } else if (payload.action === "punch.deny") {
+    try { denyPunch(store,payload.entry,new Date().toISOString(),makeId()); }
+    catch(error) { return NextResponse.json({error:error instanceof Error?error.message:"Unable to deny fingerprint log."},{status:400}); }
   } else if (payload.action === "attendance.manual") {
     try { addAttendanceCorrection(store,payload.entry,makeId(),new Date().toISOString()); }
     catch(error) { return NextResponse.json({error:error instanceof Error?error.message:"Invalid attendance correction."},{status:400}); }

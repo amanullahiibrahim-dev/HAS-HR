@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { NextResponse } from "next/server";
-import { isAdmin, isSameOrigin } from "@/lib/auth";
+import { isSignedIn, isSameOrigin } from "@/lib/auth";
 import { makeId, readStore, writeStore } from "@/lib/store";
 import { maxMcBytes, mcFilePath, validateMcFile } from "@/lib/mc-documents";
 export const runtime="nodejs";
 export async function POST(request:Request){
-  if(!isAdmin(request))return NextResponse.json({error:"Administrator sign-in required."},{status:401});
+  if(!isSignedIn(request))return NextResponse.json({error:"Sign-in required."},{status:401});
   if(!isSameOrigin(request))return NextResponse.json({error:"Invalid request origin."},{status:403});
   if(!request.headers.get("content-type")?.startsWith("multipart/form-data"))return NextResponse.json({error:"Choose an MC file to upload."},{status:400});
   const reader=request.body?.getReader();if(!reader)return NextResponse.json({error:"Choose an MC file."},{status:400});

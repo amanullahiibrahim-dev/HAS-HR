@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import { NextResponse } from "next/server";
-import { isAdmin } from "@/lib/auth";
+import { isSignedIn } from "@/lib/auth";
 import { readStore } from "@/lib/store";
 import { mcFilePath } from "@/lib/mc-documents";
 export const runtime="nodejs";
 export async function GET(request:Request,context:{params:Promise<{id:string}>}){
-  if(!isAdmin(request))return NextResponse.json({error:"Administrator sign-in required."},{status:401});
+  if(!isSignedIn(request))return NextResponse.json({error:"Sign-in required."},{status:401});
   const {id}=await context.params;
   const document=readStore().mcDocuments?.find(d=>d.id===id);
   if(!document)return NextResponse.json({error:"MC file not found."},{status:404});

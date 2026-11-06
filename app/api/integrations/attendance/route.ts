@@ -12,6 +12,8 @@ export async function POST(request: Request) {
   const supplied = request.headers.get("authorization")?.replace(/^Bearer /,"") || "";
   const a=Buffer.from(supplied), b=Buffer.from(expected);
   if (a.length !== b.length || !timingSafeEqual(a,b)) return NextResponse.json({error:"Unauthorized sync request."},{status:401});
+  const expectedSerial=process.env.ZKTECO_DEVICE_SN?.trim();
+  if (!expectedSerial) return NextResponse.json({error:"Configure the attendance terminal serial before importing logs."},{status:503});
   const chunks: Uint8Array[]=[];
   let size=0;
   if (!request.body) return NextResponse.json({error:"A logs payload is required."},{status:400});
@@ -27,11 +29,11 @@ export async function POST(request: Request) {
       const fields=value as Record<string, unknown>;
       return {...punch, verify: typeof fields.verify === "string" ? fields.verify.slice(0,64) : ""};
     });
+    if (logs.some((p: {serial:string})=>p.serial!==expectedSerial)) throw new Error("Log serial does not match the configured terminal.");
     if (payload.deviceSerial !== undefined) {
       deviceSerial=payload.deviceSerial;
       if (typeof deviceSerial !== "string" || !deviceSerial.trim() || deviceSerial.length>128 || logs.some((p: {serial:string})=>p.serial!==deviceSerial)) throw new Error("Device serial must match every log.");
-      const expectedSerial=process.env.ZKTECO_DEVICE_SN;
-      if (expectedSerial && expectedSerial!==deviceSerial) throw new Error("Device serial does not match the configured terminal.");
+      if (expectedSerial!==deviceSerial) throw new Error("Device serial does not match the configured terminal.");
     }
   } catch(error) {return NextResponse.json({error:error instanceof Error?error.message:"Invalid logs payload."},{status:400});}
   const store=readStore();

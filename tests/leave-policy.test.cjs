@@ -3,9 +3,9 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const ts=require('typescript');
-const exportsObject={};
-vm.runInNewContext(ts.transpileModule(fs.readFileSync('lib/leave-policy.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:exportsObject});
-const p=exportsObject;
+const cache={};function load(name){if(cache[name])return cache[name];const exports={};cache[name]=exports;vm.runInNewContext(ts.transpileModule(fs.readFileSync('lib/'+name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports,require:n=>load(n.slice(2))});return exports;}
+const p=load('leave-policy');
+
 test('allowances match the supplied leave guide',()=>{
   for(const [type,days] of Object.entries({Family:10,Annual:30,Hajj:0,Umra:0,Paternity:30,'Sick with MC':30,'Sick without MC':15}))assert.equal(p.entitlementFor(type,{}),days);
   assert.equal(p.entitlementFor('Circumcision',{gender:'Female'}),5);

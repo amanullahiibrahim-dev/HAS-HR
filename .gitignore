@@ -14,3 +14,6 @@ next-dev.*.log
 # Private staff imports and generated TypeScript cache
 /seed/staff.json
 *.tsbuildinfo
+
+# Isolated production releases and local run configuration
+/.haaziry-production/
