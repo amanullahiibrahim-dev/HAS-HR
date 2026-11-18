@@ -15,7 +15,7 @@ import { addAttendanceCorrection } from "@/lib/attendance";
 import { applyLeaveEdit } from "@/lib/leave-edits";
 import { NextResponse } from "next/server";
 import { requiredArrival } from "@/lib/attendance-schedule";
-import { currentSession, isAdmin, isSignedIn, isSameOrigin } from "@/lib/auth";
+import { currentSession, isAdmin, isSameOrigin } from "@/lib/auth";
 import { allLeaveTypes } from "@/lib/leave-policy";
 import type { LeaveType } from "@/lib/leave-policy";
 import { validateSickWithoutMcRun, validLeaveDate } from "@/lib/leave-policy";
@@ -33,11 +33,13 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  if (!isSignedIn(request)) return NextResponse.json({ error: "Sign-in required." }, { status: 401 });
+  const session = currentSession(request);
+  if (!session) return NextResponse.json({ error: "Sign-in required." }, { status: 401 });
   if (!isSameOrigin(request)) return NextResponse.json({ error: "Invalid request origin." }, { status: 403 });
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!payload || typeof payload.action !== "string") return NextResponse.json({ error: "A valid action is required." }, { status: 400 });
   if (["employee.period-balances", "employee.opening-balance", "employee.balance"].includes(payload.action) && !isAdmin(request)) return NextResponse.json({ error: "Only the Administrator can edit leave balances." }, { status: 403 });
+  if (payload.action === "leave.delete" && !isAdmin(request)) return NextResponse.json({ error: "Only the Administrator can delete leave records." }, { status: 403 });
   const store = readStore();
   initializePunchOwnership(store);
 
@@ -212,5 +214,5 @@ export async function POST(request: Request) {
 
   writeStore(store);
   if(store.pendingEmployeeFileDeletes?.length){flushEmployeeFileDeletes(store);writeStore(store);}
-  return NextResponse.json({...stateForClient(store),deletionFilesPending:store.pendingEmployeeFileDeletes?.length||0});
+  return NextResponse.json({...stateForClient(store),viewer:{name:session.name,kind:session.kind},deletionFilesPending:store.pendingEmployeeFileDeletes?.length||0});
 }

@@ -478,7 +478,8 @@ function leaveRecordRowMarkup(leave){
   const duty=leave.duty;
   const notes=(leave.reason?`<p><strong>Reason:</strong> ${esc(leave.reason)}</p>`:'')+(duty?`<p><strong>Destination:</strong> ${esc(duty.destination)}</p><p><strong>Purpose:</strong> ${esc(duty.purpose)}</p><p><strong>Order:</strong> ${esc(duty.approvalReference)}</p><p><strong>Duty times:</strong> ${esc(leaveRecordDate(leave.start))} ${esc(duty.startTime)} – ${esc(leaveRecordDate(duty.lastDate))} ${esc(duty.endTime)}</p>${duty.reportedAt?`<p><strong>Reported:</strong> ${esc(duty.reportedAt.replace('T',' '))} · ${esc(duty.reportReference)}</p>`:''}`:'');
   const completed=leave.status==='Completed',closed=leave.status==='Declined',amount=closed?leave.days:completed?(leave.usedDays??leave.deductibleDays??leave.days):(leave.deductibleDays??leave.days),dayLabel=completed?'Used':closed?'Planned':'Reserved';
-  let actions=button('Edit','editLeaveRecord',leave.id)+`<button type="button" class="text-btn leave-delete-action" data-delete-leave="${esc(leave.id)}">Delete</button>`;
+  let actions=button('Edit','editLeaveRecord',leave.id);
+  if(db.viewer?.kind==='admin')actions+=`<button type="button" class="text-btn leave-delete-action" data-delete-leave="${esc(leave.id)}">Delete</button>`;
   if(leave.type==='Duty travel'&&leave.status==='Approved')actions+=`<button type="button" class="text-btn" data-duty-report="${esc(leave.id)}">Record return</button>`;
   if(leave.status==='Pending')actions+=button('Approve','decision',leave.id,'Approved')+button('Decline','decision',leave.id,'Declined');
   else if(completed&&leave.type!=='Duty travel')actions+=button('Adjust days','editLeaveDays',leave.id);
@@ -778,6 +779,7 @@ function renderPeople() {
   document.getElementById('people-table').innerHTML=people.length?people.map(person=>`<tr><td>${personCell(person.name)}</td><td>${esc(person.role)}</td><td>${esc(person.dept||'—')}</td><td>${esc(person.devicePin)}</td><td>${esc(person.idCardNumber||'-')}</td><td class="employee-action-cell"><button type="button" class="text-btn employee-edit" data-edit-employee="${esc(person.id)}" aria-label="Edit ${esc(person.name)}">Edit</button><button type="button" class="text-btn employee-remove" data-employee-id="${esc(person.id)}" aria-label="Remove ${esc(person.name)}">Remove</button></td></tr>`).join(''):`<tr><td colspan="6" class="empty">${query?'No staff match your search.':'No employees. Add an employee to get started.'}</td></tr>`;
 }
 function confirmLeaveDeletion(id) {
+  if(db.viewer?.kind!=='admin')return toast('Only the Administrator can delete leave records.');
   const leave=db.leaves.find(item=>item.id===id);if(!leave)return toast('Leave record not found.');
   document.getElementById('modal-title').textContent='Delete leave permanently?';
   document.getElementById('modal-body').innerHTML=`<p><strong>${esc(leave.name)}</strong><br>${esc(leave.type)} · ${leavePeriodMarkup(leave)}<br>Status: ${esc(leave.status)}</p><p class="record-detail">This permanently removes this leave, its edit history and unshared MC attachments. It cannot be undone. Leave balances and attendance will be recalculated. Original machine punches are retained.</p><div class="field"><label for="leave-delete-reason">Reason for deletion (required)</label><textarea id="leave-delete-reason" rows="3" maxlength="1000" placeholder="For example: wrong leave applied, or staff decided to work" required></textarea></div>`;

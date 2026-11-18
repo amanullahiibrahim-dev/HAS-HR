@@ -1,12 +1,12 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
 function harness(){
-  let writes=0,authenticated=true,sameOrigin=true;const cache={},store={people:[{joinedOn:'2010-01-01',id:'A',name:'Teacher',role:'Teacher',devicePin:'01',annual:30,medical:0,casual:0,workStart:'07:00'}],leaves:[],punches:[],holidays:[],device:{lastSeen:null,serial:null,count:0}};
-  const mock={"next/server":{NextResponse:{json:(data,options)=>new Response(JSON.stringify(data),{status:options?.status||200,headers:{'content-type':'application/json'}})}},"@/lib/auth":{isAdmin:()=>authenticated,isSignedIn:()=>authenticated,currentSession:()=>authenticated?{kind:'admin'}:null,isSameOrigin:()=>sameOrigin}};
+  let writes=0,authenticated=true,administrator=true,sameOrigin=true;const cache={},store={people:[{joinedOn:'2010-01-01',id:'A',name:'Teacher',role:'Teacher',devicePin:'01',annual:30,medical:0,casual:0,workStart:'07:00'}],leaves:[],punches:[],holidays:[],device:{lastSeen:null,serial:null,count:0}};
+  const mock={"next/server":{NextResponse:{json:(data,options)=>new Response(JSON.stringify(data),{status:options?.status||200,headers:{'content-type':'application/json'}})}},"@/lib/auth":{isAdmin:()=>authenticated&&administrator,isSignedIn:()=>authenticated,currentSession:()=>authenticated?{kind:administrator?'admin':'user',name:administrator?'Administrator':'Staff user'}:null,isSameOrigin:()=>sameOrigin}};
   function load(name){if(cache[name])return cache[name];const exports={};cache[name]=exports;vm.runInNewContext(ts.transpileModule(fs.readFileSync(name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText,{exports,require:n=>mock[n]||(n.startsWith('@/')?load(n.slice(2)):n.startsWith('./')?load('lib/'+n.slice(2)):require(n)),Date,Map,Set,process,Buffer,Response,URL,Error});return exports;}
   const actual=load('lib/store');cache['lib/store']={...actual,readStore:()=>store,writeStore:()=>{writes++},makeId:()=>String(store.leaves.length+1)};
   const route=load('app/api/state/route'),preview=load('app/api/leave-preview/route');
-  return {store,load,send:payload=>route.POST(new Request('http://127.0.0.1/api/state',{method:'POST',body:JSON.stringify(payload)})),preview:q=>preview.GET(new Request('http://127.0.0.1/api/leave-preview?'+new URLSearchParams(q))),writes:()=>writes,deny:()=>{authenticated=false;},crossOrigin:()=>{sameOrigin=false;}};
+  return {store,load,send:payload=>route.POST(new Request('http://127.0.0.1/api/state',{method:'POST',body:JSON.stringify(payload)})),preview:q=>preview.GET(new Request('http://127.0.0.1/api/leave-preview?'+new URLSearchParams(q))),writes:()=>writes,asUser:()=>{administrator=false;},deny:()=>{authenticated=false;},crossOrigin:()=>{sameOrigin=false;}};
 }
 const base={employeeId:'A',start:'2026-10-26',end:'2026-11-01',days:2,status:'Approved'};
 test('state endpoint saves MC pending receipt, and rejects invalid verified coverage without writing',async()=>{
@@ -205,4 +205,25 @@ test('simplified supervisor endpoint edits preserve historical boundaries and re
  const payload={action:'supervisor.save',assignment:{id:'S1',supervisor:{kind:'minister'},employeeIds:['A']},expectedRevision:0};
  const response=await h.send(payload);assert.equal(response.status,200,await response.clone().text());const record=h.store.supervisorAssignments[0];assert.equal(record.from,'2026-01-01');assert.equal(record.to,'2026-06-30');assert.equal(record.revision,1);assert.equal(record.supervisor.kind,'minister');assert.equal(h.store.supervisorChanges[0].before.supervisor.id,'B');assert.ok(h.store.supervisorChanges[0].reason.trim());
  const before=JSON.stringify(h.store),writes=h.writes();assert.equal((await h.send(payload)).status,400);assert.equal(h.writes(),writes);assert.equal(JSON.stringify(h.store),before);
+});
+
+
+test('ordinary users cannot delete leave records, including forged direct requests',async()=>{
+ const h=harness();h.asUser();
+ h.store.leaves=[{id:'L',employeeId:'A',type:'Annual',start:'2026-11-01',end:'2026-11-03',days:2,status:'Approved',revision:0}];
+ const before=JSON.stringify(h.store);
+ for(const id of ['L','missing']){
+  const response=await h.send({action:'leave.delete',id,expectedRevision:0,reason:'Direct request'});
+  assert.equal(response.status,403);assert.match((await response.json()).error,/Only the Administrator/);
+ }
+ assert.equal(h.writes(),0);assert.equal(JSON.stringify(h.store),before);
+});
+
+test('successful saves preserve the signed-in role for administrators and ordinary users',async()=>{
+ for(const kind of ['admin','user']){
+  const h=harness();if(kind==='user')h.asUser();
+  const response=await h.send({action:'leave.create',leave:{...base,type:'Annual'}});
+  assert.equal(response.status,200);
+  const state=await response.json();assert.equal(state.viewer.kind,kind);assert.ok(state.viewer.name);
+ }
 });

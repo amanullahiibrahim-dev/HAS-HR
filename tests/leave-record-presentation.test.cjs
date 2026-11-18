@@ -4,7 +4,7 @@ const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 function presentation(){
  const source=fs.readFileSync('public/app.js','utf8'),ast=ts.createSourceFile('app.js',source,ts.ScriptTarget.ES2022,true,ts.ScriptKind.JS);
  const declarations=ast.statements.filter(node=>ts.isFunctionDeclaration(node)).map(node=>node.getText(ast)).join('\n');
- const context={Date,Map,Set,Intl,db:{people:[{id:'STAFF-A',name:'Sample Staff',devicePin:'001'}]},esc:escapeHtml,nice:date=>date?new Date(date+'T12:00:00').toLocaleDateString('en',{month:'short',day:'numeric',year:'numeric'}):'—'};
+ const context={Date,Map,Set,Intl,db:{viewer:{kind:'admin',name:'Administrator'},people:[{id:'STAFF-A',name:'Sample Staff',devicePin:'001'}]},esc:escapeHtml,nice:date=>date?new Date(date+'T12:00:00').toLocaleDateString('en',{month:'short',day:'numeric',year:'numeric'}):'—'};
  vm.createContext(context);vm.runInContext(declarations,context);
  context.personCell=name=>'<div class="person"><strong>'+escapeHtml(name)+'</strong></div>';
  context.statusTag=status=>'<span class="status">'+escapeHtml(status)+'</span>';
@@ -59,4 +59,21 @@ test('record metadata is escaped and reasons or duty details are available witho
  assert.doesNotMatch(row,/<img\b|<script\b|<svg\b|<order>|<report>/);
  for(const value of ['&lt;img','&lt;b&gt;Family&lt;/b&gt;','&lt;script&gt;private&lt;/script&gt;','&lt;i&gt;Island&lt;/i&gt;','&lt;order&gt;','&lt;report&gt;'])assert.ok(row.includes(value),value+' is retained as text');
  assert.match(row,/<details\b/);
+});
+
+
+test('only administrators see Delete; ordinary users and missing roles cannot open deletion',()=>{
+ const view=presentation();
+ assert.match(view.leaveRecordRowMarkup(fixture()),/data-delete-leave=/);
+ for(const viewer of [{kind:'user',name:'Staff user'},undefined]){
+  view.db.viewer=viewer;
+  for(const status of ['Pending','Approved','Completed','Declined']){
+   const row=view.leaveRecordRowMarkup(fixture({status}));
+   assert.doesNotMatch(row,/data-delete-leave=|>Delete<\/button>/);
+   assert.match(row,/>Edit<\/button>/);
+  }
+  let message;view.toast=value=>{message=value;};
+  view.confirmLeaveDeletion('LEAVE-A');
+  assert.match(message,/Only the Administrator/);
+ }
 });
